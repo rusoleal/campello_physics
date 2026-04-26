@@ -1,5 +1,6 @@
 #include <campello_physics/body_interface.h>
 #include <campello_physics/physics_world.h>
+#include <mutex>
 
 namespace campello::physics {
 

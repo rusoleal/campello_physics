@@ -9,10 +9,6 @@
 #   OS64             - iOS device (arm64)
 #   SIMULATOR64      - iOS Simulator (x86_64)
 #   SIMULATORARM64   - iOS Simulator (arm64, Apple Silicon host)
-#   TVOS             - tvOS device (arm64)
-#   TVOSSIMULATOR    - tvOS Simulator (arm64)
-#   WATCHOS          - watchOS device (arm64_32 + arm64)
-#   WATCHOSSIMULATOR - watchOS Simulator (arm64)
 #   XROS             - visionOS device (arm64)
 #   XROSSIMULATOR    - visionOS Simulator (arm64)
 
@@ -45,34 +41,6 @@ elseif(PLATFORM STREQUAL "SIMULATORARM64")
     set(CMAKE_OSX_SYSROOT          iphonesimulator)
     set(_DEFAULT_DEPLOY_TARGET     "15.0")
 
-elseif(PLATFORM STREQUAL "TVOS")
-    set(CMAKE_SYSTEM_NAME          tvOS)
-    set(CMAKE_SYSTEM_PROCESSOR     arm64)
-    set(CMAKE_OSX_ARCHITECTURES    arm64)
-    set(CMAKE_OSX_SYSROOT          appletvos)
-    set(_DEFAULT_DEPLOY_TARGET     "16.0")
-
-elseif(PLATFORM STREQUAL "TVOSSIMULATOR")
-    set(CMAKE_SYSTEM_NAME          tvOS)
-    set(CMAKE_SYSTEM_PROCESSOR     arm64)
-    set(CMAKE_OSX_ARCHITECTURES    arm64)
-    set(CMAKE_OSX_SYSROOT          appletvsimulator)
-    set(_DEFAULT_DEPLOY_TARGET     "16.0")
-
-elseif(PLATFORM STREQUAL "WATCHOS")
-    set(CMAKE_SYSTEM_NAME          watchOS)
-    set(CMAKE_SYSTEM_PROCESSOR     arm64)
-    set(CMAKE_OSX_ARCHITECTURES    "arm64_32;arm64")
-    set(CMAKE_OSX_SYSROOT          watchos)
-    set(_DEFAULT_DEPLOY_TARGET     "8.0")
-
-elseif(PLATFORM STREQUAL "WATCHOSSIMULATOR")
-    set(CMAKE_SYSTEM_NAME          watchOS)
-    set(CMAKE_SYSTEM_PROCESSOR     arm64)
-    set(CMAKE_OSX_ARCHITECTURES    arm64)
-    set(CMAKE_OSX_SYSROOT          watchsimulator)
-    set(_DEFAULT_DEPLOY_TARGET     "8.0")
-
 elseif(PLATFORM STREQUAL "XROS")
     set(CMAKE_SYSTEM_NAME          visionOS)
     set(CMAKE_SYSTEM_PROCESSOR     arm64)
@@ -91,8 +59,6 @@ else()
     message(FATAL_ERROR
         "Unknown PLATFORM '${PLATFORM}'. Valid values: "
         "OS64 SIMULATOR64 SIMULATORARM64 "
-        "TVOS TVOSSIMULATOR "
-        "WATCHOS WATCHOSSIMULATOR "
         "XROS XROSSIMULATOR")
 endif()
 

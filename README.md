@@ -85,8 +85,6 @@ The engine is modeled after the best ideas from **Unity (PhysX)**, **Unreal (Cha
 | macOS | x86_64 (Intel), ARM64 (Apple Silicon) | Clang | `macos-13`, `macos-15` |
 | Windows | x86_64, ARM64 | MSVC | `windows-2022`, `windows-11-arm` |
 | iOS | arm64 device, x86_64 sim, arm64 sim | Clang (Xcode 16) | `macos-15` |
-| tvOS | arm64 device, arm64 sim | Clang (Xcode 16) | `macos-15` |
-| watchOS | arm64 device, arm64 sim | Clang (Xcode 16) | `macos-15` |
 | visionOS | arm64 device, arm64 sim | Clang (Xcode 16) | `macos-15` |
 | Android | armeabi-v7a, arm64-v8a, x86, x86_64 | NDK Clang | API 21 / 29 / 35 |
 

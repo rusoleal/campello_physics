@@ -9,6 +9,7 @@
 #include "vehicle_system.h"
 #include <algorithm>
 #include <cmath>
+#include <mutex>
 #include <thread>
 #include <vector>
 
