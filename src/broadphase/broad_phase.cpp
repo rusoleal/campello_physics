@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <iterator>
 
 namespace campello::physics {
 
