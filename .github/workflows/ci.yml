@@ -1,4 +1,4 @@
-name: CI — Desktop
+name: CI
 
 on:
   push:
@@ -8,9 +8,9 @@ on:
 
 jobs:
 
-  # ── Release build + tests ──────────────────────────────────────────────────
+  # ── Desktop: Linux, macOS, Windows — build + test ─────────────────────────
 
-  build:
+  desktop:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.runner }}
     strategy:
@@ -18,7 +18,7 @@ jobs:
       matrix:
         include:
 
-          # ── Linux x86_64 ───────────────────────────────────────────────────
+          # Linux x86_64
           - name: Linux x86_64 / GCC 13
             runner: ubuntu-24.04
             cc: gcc-13
@@ -31,7 +31,7 @@ jobs:
             cxx: clang++-17
             apt: clang-17
 
-          # ── Linux ARM64 ────────────────────────────────────────────────────
+          # Linux ARM64
           - name: Linux ARM64 / GCC 13
             runner: ubuntu-24.04-arm
             cc: gcc-13
@@ -44,24 +44,24 @@ jobs:
             cxx: clang++-17
             apt: clang-17
 
-          # ── macOS x86_64 (Intel) ───────────────────────────────────────────
+          # macOS x86_64 (Intel)
           - name: macOS x86_64 / Clang
             runner: macos-13
             cc: clang
             cxx: clang++
 
-          # ── macOS ARM64 (Apple Silicon) ────────────────────────────────────
+          # macOS ARM64 (Apple Silicon)
           - name: macOS ARM64 / Clang
             runner: macos-15
             cc: clang
             cxx: clang++
 
-          # ── Windows x86_64 ─────────────────────────────────────────────────
+          # Windows x86_64
           - name: Windows x86_64 / MSVC
             runner: windows-2022
             cmake_arch: x64
 
-          # ── Windows ARM64 (native runner) ──────────────────────────────────
+          # Windows ARM64 (native runner)
           - name: Windows ARM64 / MSVC
             runner: windows-11-arm
             cmake_arch: ARM64
@@ -100,9 +100,9 @@ jobs:
         working-directory: build
         run: ctest -C Release --output-on-failure
 
-  # ── Debug build + tests (Linux x86_64 only) ────────────────────────────────
+  # ── Desktop Debug (Linux x86_64 only) ─────────────────────────────────────
 
-  debug:
+  desktop-debug:
     name: Linux x86_64 / GCC 13 / Debug
     runs-on: ubuntu-24.04
     steps:
@@ -128,3 +128,73 @@ jobs:
       - name: Test
         working-directory: build
         run: ctest --output-on-failure
+
+  # ── Android: all ABIs × API levels — build only ───────────────────────────
+
+  android:
+    name: Android ${{ matrix.abi }} / API ${{ matrix.api }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        abi: [armeabi-v7a, arm64-v8a, x86, x86_64]
+        api: [21, 29, 35]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Configure
+        run: >
+          cmake -B build -S .
+          -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_LATEST_HOME/build/cmake/android.toolchain.cmake
+          -DANDROID_ABI=${{ matrix.abi }}
+          -DANDROID_PLATFORM=android-${{ matrix.api }}
+          -DANDROID_STL=c++_static
+          -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+  # ── Apple platforms: iOS / tvOS / watchOS / visionOS — build only ─────────
+
+  apple:
+    name: ${{ matrix.name }}
+    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # iOS
+          - { name: "iOS device / arm64",             platform: OS64            }
+          - { name: "iOS Simulator / x86_64",         platform: SIMULATOR64     }
+          - { name: "iOS Simulator / arm64",          platform: SIMULATORARM64  }
+          # tvOS
+          - { name: "tvOS device / arm64",            platform: TVOS            }
+          - { name: "tvOS Simulator / arm64",         platform: TVOSSIMULATOR   }
+          # watchOS
+          - { name: "watchOS device / arm64",         platform: WATCHOS         }
+          - { name: "watchOS Simulator / arm64",      platform: WATCHOSSIMULATOR }
+          # visionOS
+          - { name: "visionOS device / arm64",        platform: XROS            }
+          - { name: "visionOS Simulator / arm64",     platform: XROSSIMULATOR   }
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode 16
+        run: sudo xcode-select -s /Applications/Xcode_16.app/Contents/Developer
+
+      - name: Configure
+        run: >
+          cmake -B build -S .
+          -DCMAKE_TOOLCHAIN_FILE=cmake/ios.toolchain.cmake
+          -DPLATFORM=${{ matrix.platform }}
+          -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
