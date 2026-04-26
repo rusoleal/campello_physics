@@ -79,13 +79,16 @@ The engine is modeled after the best ideas from **Unity (PhysX)**, **Unreal (Cha
 
 ## Platform Support
 
-| Platform | Architecture | Status |
-|---|---|---|
-| macOS | x86_64, Apple Silicon (Clang) | Supported |
-| Linux | x86_64, AArch64 (GCC, Clang) | Supported |
-| Windows | x86_64 (MSVC, Clang) | Supported |
-| iOS | AArch64 (Clang) | Supported |
-| Android | AArch64, x86_64 (NDK Clang) | Supported |
+| Platform | Architecture | Compiler | CI |
+|---|---|---|---|
+| Linux | x86_64, ARM64 | GCC 13, Clang 17 | `ubuntu-24.04`, `ubuntu-24.04-arm` |
+| macOS | x86_64 (Intel), ARM64 (Apple Silicon) | Clang | `macos-13`, `macos-15` |
+| Windows | x86_64, ARM64 | MSVC | `windows-2022`, `windows-11-arm` |
+| iOS | arm64 device, x86_64 sim, arm64 sim | Clang (Xcode 16) | `macos-15` |
+| tvOS | arm64 device, arm64 sim | Clang (Xcode 16) | `macos-15` |
+| watchOS | arm64 device, arm64 sim | Clang (Xcode 16) | `macos-15` |
+| visionOS | arm64 device, arm64 sim | Clang (Xcode 16) | `macos-15` |
+| Android | armeabi-v7a, arm64-v8a, x86, x86_64 | NDK Clang | API 21 / 29 / 35 |
 
 ---
 

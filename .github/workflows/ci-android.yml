@@ -1,0 +1,53 @@
+name: CI — Android
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Build-only: no emulator required.
+# All four ABIs × three representative API levels.
+
+jobs:
+  build:
+    name: Android ${{ matrix.abi }} / API ${{ matrix.api }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        abi:
+          - armeabi-v7a    # ARMv7 32-bit
+          - arm64-v8a      # AArch64 64-bit
+          - x86            # x86 32-bit
+          - x86_64         # x86 64-bit
+        api:
+          - 21   # Android 5.0  — minimum widely supported
+          - 29   # Android 10   — Play Store baseline
+          - 35   # Android 15   — latest stable
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Java (required by Android SDK tooling)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Select NDK version
+        # Pin to a recent stable NDK; update when the project NDK minimum changes.
+        run: |
+          echo "ANDROID_NDK_ROOT=$ANDROID_NDK_LATEST_HOME" >> $GITHUB_ENV
+
+      - name: Configure
+        run: >
+          cmake -B build -S .
+          -DCMAKE_TOOLCHAIN_FILE=${{ env.ANDROID_NDK_ROOT }}/build/cmake/android.toolchain.cmake
+          -DANDROID_ABI=${{ matrix.abi }}
+          -DANDROID_PLATFORM=android-${{ matrix.api }}
+          -DANDROID_STL=c++_static
+          -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release --parallel

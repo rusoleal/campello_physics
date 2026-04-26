@@ -11,6 +11,12 @@ First stable release. All planned phases complete.
 
 ### Added
 
+**CI / Platform (v1.0.0 update)**
+- Desktop CI expanded: Linux x86_64 + ARM64 (GCC 13 & Clang 17), macOS x86_64 (macos-13) + ARM64 (macos-15), Windows x86_64 (windows-2022) + ARM64 (windows-11-arm)
+- New `ci-android.yml`: all 4 ABIs (armeabi-v7a, arm64-v8a, x86, x86_64) × API levels 21 / 29 / 35
+- New `ci-ios.yml`: iOS (OS64, SIMULATOR64, SIMULATORARM64), tvOS, watchOS, visionOS device + simulator targets
+- `cmake/ios.toolchain.cmake` expanded from 3 to 9 Apple platform targets (added tvOS, watchOS, visionOS + their simulators)
+
 **Foundation & Primitives (Phase 1)**
 - Platform detection macros (`CAMPELLO_PLATFORM_WINDOWS/MACOS/LINUX/IOS/ANDROID`)
 - `CAMPELLO_FORCE_INLINE`, `CAMPELLO_NODISCARD`, `CAMPELLO_LIKELY/UNLIKELY`

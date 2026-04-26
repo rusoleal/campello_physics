@@ -1,4 +1,4 @@
-name: CI
+name: CI — Desktop
 
 on:
   push:
@@ -7,51 +7,89 @@ on:
     branches: [main]
 
 jobs:
+
+  # ── Release build + tests ──────────────────────────────────────────────────
+
   build:
-    name: ${{ matrix.os }} / ${{ matrix.compiler }}
-    runs-on: ${{ matrix.os }}
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
-            compiler: gcc
+
+          # ── Linux x86_64 ───────────────────────────────────────────────────
+          - name: Linux x86_64 / GCC 13
+            runner: ubuntu-24.04
             cc: gcc-13
             cxx: g++-13
-          - os: ubuntu-latest
-            compiler: clang
+            apt: gcc-13 g++-13
+
+          - name: Linux x86_64 / Clang 17
+            runner: ubuntu-24.04
             cc: clang-17
             cxx: clang++-17
-          - os: macos-latest
-            compiler: clang
+            apt: clang-17
+
+          # ── Linux ARM64 ────────────────────────────────────────────────────
+          - name: Linux ARM64 / GCC 13
+            runner: ubuntu-24.04-arm
+            cc: gcc-13
+            cxx: g++-13
+            apt: gcc-13 g++-13
+
+          - name: Linux ARM64 / Clang 17
+            runner: ubuntu-24.04-arm
+            cc: clang-17
+            cxx: clang++-17
+            apt: clang-17
+
+          # ── macOS x86_64 (Intel) ───────────────────────────────────────────
+          - name: macOS x86_64 / Clang
+            runner: macos-13
             cc: clang
             cxx: clang++
-          - os: windows-latest
-            compiler: msvc
-            cc: cl
-            cxx: cl
+
+          # ── macOS ARM64 (Apple Silicon) ────────────────────────────────────
+          - name: macOS ARM64 / Clang
+            runner: macos-15
+            cc: clang
+            cxx: clang++
+
+          # ── Windows x86_64 ─────────────────────────────────────────────────
+          - name: Windows x86_64 / MSVC
+            runner: windows-2022
+            cmake_arch: x64
+
+          # ── Windows ARM64 (native runner) ──────────────────────────────────
+          - name: Windows ARM64 / MSVC
+            runner: windows-11-arm
+            cmake_arch: ARM64
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install GCC 13 (Ubuntu)
-        if: matrix.os == 'ubuntu-latest' && matrix.compiler == 'gcc'
+      - name: Install compiler (Linux)
+        if: matrix.apt != ''
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-13 g++-13
+          sudo apt-get install -y ${{ matrix.apt }}
 
-      - name: Install Clang 17 (Ubuntu)
-        if: matrix.os == 'ubuntu-latest' && matrix.compiler == 'clang'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y clang-17
-
-      - name: Configure
+      - name: Configure (Linux / macOS)
+        if: runner.os != 'Windows'
         env:
-          CC: ${{ matrix.cc }}
+          CC:  ${{ matrix.cc }}
           CXX: ${{ matrix.cxx }}
         run: >
           cmake -B build -S .
+          -DCMAKE_BUILD_TYPE=Release
+          -DCAMPELLO_PHYSICS_BUILD_TESTS=ON
+
+      - name: Configure (Windows)
+        if: runner.os == 'Windows'
+        run: >
+          cmake -B build -S .
+          -A ${{ matrix.cmake_arch }}
           -DCMAKE_BUILD_TYPE=Release
           -DCAMPELLO_PHYSICS_BUILD_TESTS=ON
 
@@ -62,10 +100,11 @@ jobs:
         working-directory: build
         run: ctest -C Release --output-on-failure
 
-  build-debug:
-    name: ubuntu-latest / gcc / Debug
-    runs-on: ubuntu-latest
+  # ── Debug build + tests (Linux x86_64 only) ────────────────────────────────
 
+  debug:
+    name: Linux x86_64 / GCC 13 / Debug
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
@@ -76,7 +115,7 @@ jobs:
 
       - name: Configure
         env:
-          CC: gcc-13
+          CC:  gcc-13
           CXX: g++-13
         run: >
           cmake -B build -S .
