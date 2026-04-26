@@ -340,6 +340,9 @@ TEST(BodyInterface, ConcurrentStepAndMutate_SerializedCorrectly) {
         }
     });
 
+    // Guarantee mutator has run at least once before the stepper sets done=true.
+    while (mutations.load() == 0) std::this_thread::yield();
+
     for (int i = 0; i < 120; ++i)
         world.step(1.f / 60.f);
     done = true;
