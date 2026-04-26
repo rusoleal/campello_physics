@@ -173,9 +173,6 @@ jobs:
           - { name: "iOS device / arm64",             platform: OS64            }
           - { name: "iOS Simulator / x86_64",         platform: SIMULATOR64     }
           - { name: "iOS Simulator / arm64",          platform: SIMULATORARM64  }
-          # visionOS
-          - { name: "visionOS device / arm64",        platform: XROS            }
-          - { name: "visionOS Simulator / arm64",     platform: XROSSIMULATOR   }
 
     steps:
       - uses: actions/checkout@v4

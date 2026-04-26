@@ -9,8 +9,6 @@
 #   OS64             - iOS device (arm64)
 #   SIMULATOR64      - iOS Simulator (x86_64)
 #   SIMULATORARM64   - iOS Simulator (arm64, Apple Silicon host)
-#   XROS             - visionOS device (arm64)
-#   XROSSIMULATOR    - visionOS Simulator (arm64)
 
 cmake_minimum_required(VERSION 3.22)
 
@@ -41,25 +39,10 @@ elseif(PLATFORM STREQUAL "SIMULATORARM64")
     set(CMAKE_OSX_SYSROOT          iphonesimulator)
     set(_DEFAULT_DEPLOY_TARGET     "15.0")
 
-elseif(PLATFORM STREQUAL "XROS")
-    set(CMAKE_SYSTEM_NAME          visionOS)
-    set(CMAKE_SYSTEM_PROCESSOR     arm64)
-    set(CMAKE_OSX_ARCHITECTURES    arm64)
-    set(CMAKE_OSX_SYSROOT          xros)
-    set(_DEFAULT_DEPLOY_TARGET     "1.0")
-
-elseif(PLATFORM STREQUAL "XROSSIMULATOR")
-    set(CMAKE_SYSTEM_NAME          visionOS)
-    set(CMAKE_SYSTEM_PROCESSOR     arm64)
-    set(CMAKE_OSX_ARCHITECTURES    arm64)
-    set(CMAKE_OSX_SYSROOT          xrsimulator)
-    set(_DEFAULT_DEPLOY_TARGET     "1.0")
-
 else()
     message(FATAL_ERROR
         "Unknown PLATFORM '${PLATFORM}'. Valid values: "
-        "OS64 SIMULATOR64 SIMULATORARM64 "
-        "XROS XROSSIMULATOR")
+        "OS64 SIMULATOR64 SIMULATORARM64")
 endif()
 
 # ── Deployment target ─────────────────────────────────────────────────────────

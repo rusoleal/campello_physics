@@ -241,28 +241,37 @@ std::string PhysicsWorld::serialize() const {
 
 namespace {
 
+// Forward-declared so JVal can hold std::vector<JKV> with an incomplete element
+// type — std::vector allows this in C++17, but std::pair does not.
+struct JKV;
+
 struct JVal {
     enum Kind { Null, Bool, Number, Str, Arr, Obj } kind = Null;
-    bool                                       b{};
-    double                                     n{};
-    std::string                                s;
-    std::vector<JVal>                          arr;
-    std::vector<std::pair<std::string, JVal>>  obj;
+    bool              b{};
+    double            n{};
+    std::string       s;
+    std::vector<JVal> arr;
+    std::vector<JKV>  obj;  // JKV is incomplete here; methods that use it are defined below
 
-    // Helpers
-    const JVal* get(std::string_view key) const {
-        if (kind != Obj) return nullptr;
-        for (const auto& kv : obj)
-            if (kv.first == key) return &kv.second;
-        return nullptr;
-    }
-    float  asFloat(float  def = 0.f) const  { return kind == Number ? static_cast<float>(n) : def; }
-    double asDouble(double def = 0.0) const { return kind == Number ? n : def; }
-    bool   asBool(bool def = false) const   { return kind == Bool ? b : def; }
-    uint32_t asUint(uint32_t def = 0) const { return kind == Number ? static_cast<uint32_t>(n) : def; }
-    int      asInt(int def = 0) const       { return kind == Number ? static_cast<int>(n) : def; }
-    std::string_view asStr() const          { return kind == Str ? std::string_view(s) : std::string_view{}; }
+    // Defined after JKV is complete (see below).
+    const JVal* get(std::string_view key) const;
+
+    float            asFloat (float    def = 0.f)  const { return kind == Number ? static_cast<float>(n)    : def; }
+    double           asDouble(double   def = 0.0)  const { return kind == Number ? n                        : def; }
+    bool             asBool  (bool     def = false) const { return kind == Bool   ? b                        : def; }
+    uint32_t         asUint  (uint32_t def = 0)    const { return kind == Number ? static_cast<uint32_t>(n) : def; }
+    int              asInt   (int      def = 0)    const { return kind == Number ? static_cast<int>(n)      : def; }
+    std::string_view asStr   ()                    const { return kind == Str    ? std::string_view(s)      : std::string_view{}; }
 };
+
+struct JKV { std::string key; JVal val; };
+
+inline const JVal* JVal::get(std::string_view key) const {
+    if (kind != Obj) return nullptr;
+    for (const auto& kv : obj)
+        if (kv.key == key) return &kv.val;
+    return nullptr;
+}
 
 struct Parser {
     std::string_view src;
@@ -345,7 +354,7 @@ std::optional<JVal> Parser::parseObject() {
         if (!expect(':')) { fail(); return std::nullopt; }
         auto val = parseValue();
         if (!val || !ok) { fail(); return std::nullopt; }
-        v.obj.emplace_back(std::move(*ks), std::move(*val));
+        v.obj.push_back({std::move(*ks), std::move(*val)});
         skipWs();
         if (peek() == '}') { ++pos; return v; }
         if (!expect(',')) { fail(); return std::nullopt; }
