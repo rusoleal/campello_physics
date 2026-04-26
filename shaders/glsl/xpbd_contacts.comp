@@ -1,0 +1,111 @@
+#version 450
+
+layout(local_size_x = 64) in;
+
+struct BodyState {
+    vec4 pos_p;
+    vec4 rot;
+    vec4 predPos_p;
+    vec4 predRot;
+    vec4 vel_p;
+    vec4 angVel_p;
+};
+
+// inv_shape_p0: .x=invInertiaY .y=invInertiaZ .z=shapeType .w=param0
+// params:       .x=param1 .y=param2 .z=param3
+struct BodyShape {
+    vec4 aabbMin_invMass;
+    vec4 aabbMax_invInertiaX;
+    vec4 invInertiaYZ_shapeType_param0;
+    vec4 params;
+};
+
+struct Params {
+    vec4 gravity_dt;
+    vec4 counts;  // x=bodyCount_f, y=maxPairs_f, z=compliance
+};
+
+layout(std430, binding=0) buffer       StateBuffer { BodyState states[]; };
+layout(std430, binding=1) readonly buffer ShapeBuffer { BodyShape shapes[]; };
+layout(std430, binding=2) readonly buffer PairsBuffer { uint pairsData[]; };
+layout(std140, binding=3) uniform       ParamBuffer  { Params p; };
+
+vec4 sphereSphereContact(vec3 posA, float rA, vec3 posB, float rB) {
+    vec3 d = posA - posB;
+    float dist = length(d);
+    float pen = rA + rB - dist;
+    if (pen <= 0.0 || dist < 1e-6) return vec4(0,0,0,-1);
+    return vec4(d / dist, pen);
+}
+
+vec4 sphereBoxContact(vec3 spherePos, float sphereR, vec3 boxPos, vec3 boxHalf) {
+    vec3 d = spherePos - boxPos;
+    vec3 closest = boxPos + clamp(d, -boxHalf, boxHalf);
+    vec3 toSphere = spherePos - closest;
+    float dist = length(toSphere);
+    float pen = sphereR - dist;
+    if (pen <= 0.0) return vec4(0,0,0,-1);
+    vec3 n = dist < 1e-6 ? vec3(0,1,0) : toSphere / dist;
+    return vec4(n, pen);
+}
+
+void main() {
+    uint k = gl_GlobalInvocationID.x;
+
+    uint pairCount = pairsData[0];
+    if (k >= pairCount) return;
+
+    uint a = pairsData[2u + k * 2u];
+    uint b = pairsData[2u + k * 2u + 1u];
+
+    float wA = shapes[a].aabbMin_invMass.w;
+    float wB = shapes[b].aabbMin_invMass.w;
+    float wSum = wA + wB;
+    if (wSum < 1e-10) return;
+
+    float stA = shapes[a].invInertiaYZ_shapeType_param0.z;
+    float stB = shapes[b].invInertiaYZ_shapeType_param0.z;
+
+    vec3 posA = states[a].predPos_p.xyz;
+    vec3 posB = states[b].predPos_p.xyz;
+
+    vec3  n;
+    float pen;
+
+    if (stA == 0.0 && stB == 0.0) {
+        float rA = shapes[a].invInertiaYZ_shapeType_param0.w;
+        float rB = shapes[b].invInertiaYZ_shapeType_param0.w;
+        vec4 r = sphereSphereContact(posA, rA, posB, rB);
+        if (r.w < 0.0) return;
+        n = r.xyz; pen = r.w;
+    } else if (stA == 0.0 && stB == 1.0) {
+        float rA    = shapes[a].invInertiaYZ_shapeType_param0.w;
+        vec3 boxH   = vec3(shapes[b].invInertiaYZ_shapeType_param0.w,
+                           shapes[b].params.x, shapes[b].params.y);
+        vec4 r = sphereBoxContact(posA, rA, posB, boxH);
+        if (r.w < 0.0) return;
+        n = r.xyz; pen = r.w;
+    } else if (stA == 1.0 && stB == 0.0) {
+        float rB    = shapes[b].invInertiaYZ_shapeType_param0.w;
+        vec3 boxH   = vec3(shapes[a].invInertiaYZ_shapeType_param0.w,
+                           shapes[a].params.x, shapes[a].params.y);
+        vec4 r = sphereBoxContact(posB, rB, posA, boxH);
+        if (r.w < 0.0) return;
+        n = -r.xyz; pen = r.w;
+    } else {
+        float rA = shapes[a].invInertiaYZ_shapeType_param0.w;
+        float rB = shapes[b].invInertiaYZ_shapeType_param0.w;
+        vec4 r = sphereSphereContact(posA, rA, posB, rB);
+        if (r.w < 0.0) return;
+        n = r.xyz; pen = r.w;
+    }
+
+    float compliance = p.counts.z;
+    float dt = p.gravity_dt.w;
+    float alphaTilde = compliance / (dt * dt);
+    float dLambda = pen / (wSum + alphaTilde);
+
+    const float jacobiScale = 0.4;
+    states[a].predPos_p.xyz = posA + jacobiScale * wA * dLambda * n;
+    states[b].predPos_p.xyz = posB - jacobiScale * wB * dLambda * n;
+}

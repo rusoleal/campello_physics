@@ -93,12 +93,13 @@ Implementation roadmap. Work through phases in order — each phase's output is 
 - [x] Sequential Impulse (SI) solver loop (N iterations, configurable)
 - [x] Warm starting (restore previous impulses at start of each step)
 - [x] Baumgarte position correction (configurable bias factor + slop)
+- [x] Split-impulse position solve (post-integration direct position/orientation correction; `positionIterations`, `positionCorrectionAlpha`)
+- [x] Stress / torture tests: box tower, sphere tower, mass-ratio extremes, deep penetration, fast-moving objects, long constraint chains, high angular velocity, random impulses, constraint drift measurement, kinematic push (15 tests in `test_stress.cpp`)
 - [x] `FixedConstraint` (locks all 6 DOF)
 - [x] `BallSocketConstraint` (3 rotational DOF free, 3 translational locked)
 - [x] `HingeConstraint` (1 rotational DOF free, limits, motor with target velocity + max force)
 - [x] `SliderConstraint` (1 translational DOF free, limits, motor)
 - [x] `DistanceConstraint` (min/max distance between anchor points)
-- [ ] `D6Constraint` (per-axis limits and drives for all 6 DOF) — deferred to Phase 12
 - [x] Unit tests: two bodies linked by FixedConstraint stay together, Hinge swings within limits
 
 ---
@@ -112,7 +113,7 @@ Implementation roadmap. Work through phases in order — each phase's output is 
 - [x] `PhysicsWorld::setSubsteps(int)` (default 1)
 - [x] `PhysicsWorld::setFixedTimestep(float)` (default 1/60)
 - [x] `PhysicsWorld::step(float deltaTime)` — fixed-timestep loop with remainder accumulation
-- [ ] Thread-safe `BodyInterface` (lock-free reads, guarded writes for add/remove) — deferred to Phase 10
+- [x] Thread-safe `BodyInterface` (lock-free reads, guarded writes for add/remove) — `createBody`/`destroyBody`/mutations take exclusive lock; reads (`getTransform`, `getLinearVelocity`, …) are lock-free; 18 tests including concurrent create, concurrent mutate, step-vs-create, step-vs-mutate-vs-destroy
 - [x] Sensor/trigger handling (collide in narrowphase but skip impulse response)
 - [x] Integration test: sphere dropped from height, bounces on static plane, contact events fire
 
@@ -152,8 +153,12 @@ Implementation roadmap. Work through phases in order — each phase's output is 
 - [x] Multi-threaded broadphase AABB pre-compute (parallel body AABB computation, serial BVH update)
 - [x] Multi-threaded narrowphase (parallel pair evaluation via std::thread, threshold 32 pairs)
 - [x] Solver remains single-threaded (SI is sequential by nature)
-- [ ] Mobile validation: compile and link on iOS (Apple Silicon) and Android (AArch64)
-- [x] Benchmark: 1000 dynamic bodies simulate at >60Hz on target desktop hardware (Pile/1000: ~423Hz, FreeFall/1000: ~909Hz)
+- [x] Mobile validation: compile and link on iOS (Apple Silicon) and Android (AArch64)
+- [x] Benchmark: 1000 dynamic bodies simulate at >60Hz on target desktop hardware
+  - FreeFall/1000: ~1092Hz | Pile/1000: ~461Hz | PileSteadyState/1000: ~506Hz
+  - ConstraintChains/100 (1100 bodies): ~241Hz | MixedScene/1000: ~226Hz
+  - Expanded suite: `BM_FreeFall`, `BM_Pile`, `BM_PileSteadyState`, `BM_ConstraintChains`, `BM_MixedScene`, `BM_PileParallel`
+  - Hz counter reports `total_steps / wall_time` for direct simulation throughput comparison
 
 ---
 
@@ -170,26 +175,43 @@ Implementation roadmap. Work through phases in order — each phase's output is 
 
 ## Phase 12 — Advanced Features
 
-- [ ] **Articulated bodies:** chain of bodies with constraints, reduced-coordinate solver option
-- [ ] **Vehicle physics:** `VehicleBody` with wheel descriptors, suspension spring model, friction model
-- [ ] **Buoyancy:** `BuoyancyVolume` (trigger volume that applies buoyant force based on submerged volume)
-- [ ] **Ragdoll helper:** `RagdollDescriptor` → creates body + constraint graph from bone hierarchy
+- [x] **Buoyancy:** `BuoyancyVolume` — Archimedes force (spherical cap formula for spheres, AABB fallback for others) + viscous drag; applied per substep before broadphase (6 tests)
+- [x] **Articulated bodies:** `ArticulatedBodyDescriptor` tree of links with `BallSocket`, `Hinge` (limits + motor), and `Fixed` joint types; `createArticulatedBody` / `destroyArticulatedBody` (6 tests)
+- [x] **Ragdoll helper:** 15-bone humanoid template (`RagdollBone::Pelvis`…`LowerLegR`); volume-proportional mass; capsule shapes; ball-socket spine/shoulders/hips; hinge elbows/knees with limits (6 tests)
+- [x] **Vehicle physics:** raycast-based wheels (no separate wheel bodies); spring-damper suspension; engine drive, braking, lateral friction; `createVehicle` / `destroyVehicle` / `syncVehicleControls` / `vehicleWheelState` (6 tests)
+- [x] `D6Constraint` (per-axis limits and drives for all 6 DOF) — deferred from Phase 6
 
 ---
 
 ## Phase 13 — Debug, Tooling & Docs
 
-- [ ] `IDebugDraw` interface (`drawLine`, `drawBox`, `drawSphere`, `drawContactPoint`)
-- [ ] `PhysicsWorld::debugDraw(IDebugDraw*)` — renders all bodies, AABBs, contacts
-- [ ] Profiling hooks (`IPhysicsProfiler` with named scopes)
-- [ ] World state serialization: `PhysicsWorld::serialize() -> std::string` (JSON)
-- [ ] World state deserialization: `PhysicsWorld::deserialize(std::string_view)`
-- [ ] Doxygen configuration (`docs/Doxyfile`)
-- [ ] Per-platform build guide (`docs/building.md`)
-- [ ] Example: `examples/falling_sphere/`
-- [ ] Example: `examples/character_controller/`
-- [ ] Example: `examples/vehicle/`
-- [ ] Example: `examples/ragdoll/`
+- [x] `IDebugDraw` interface (`drawLine`, `drawBox`, `drawSphere`, `drawCapsule`, `drawAABB`, `drawArrow`, `drawPoint`) with default implementations composed from `drawLine`
+- [x] `PhysicsWorld::debugDraw(IDebugDraw&, DebugDrawFlags)` — renders bodies, AABBs, contacts, constraints, velocity arrows (19 tests)
+- [x] `DebugDrawFlags` bitmask (`BodyShapes`, `BodyAABBs`, `ContactPoints`, `Constraints`, `SleepState`, `Velocities`, `All`)
+- [x] Profiling hooks (`IPhysicsProfiler` with `beginScope`/`endScope`, `ProfileScope` RAII guard, `CAMPELLO_PROFILE_SCOPE` macro)
+- [x] Profiler scope calls wired into `substep` pipeline (BroadPhase, NarrowPhase, BuildContacts, Solver, Integrate, Buoyancy, Vehicles)
+- [x] World state serialization: `PhysicsWorld::serialize() -> std::string` (JSON, hand-rolled writer, 17 tests)
+- [x] World state deserialization: `PhysicsWorld::deserialize(std::string_view)` (recursive-descent parser, all shapes, full body state)
+- [x] Doxygen configuration (`docs/Doxyfile`)
+- [x] Per-platform build guide (`docs/building.md`)
+- [x] Example: `examples/falling_sphere/`
+- [x] Example: `examples/character_controller/`
+- [x] Example: `examples/vehicle/`
+- [x] Example: `examples/ragdoll/`
+
+---
+
+## Phase 15 — Island Detection & Coordinated Sleep
+
+- [x] Union-Find (disjoint sets, path-halving + union-by-rank) for grouping connected components
+- [x] `buildIslands()`: one island per connected component of the contact/constraint graph; dynamic/kinematic bodies only in UF; static bodies serve as anchors but are not in any island
+- [x] Contact-based edges: every dynamic-dynamic contact pair unions its two bodies
+- [x] Constraint-based edges: every constraint between two dynamic/kinematic bodies unions them
+- [x] Wake propagation: if any body in an island is awake, all sleeping bodies in that island are immediately woken
+- [x] Island-level sleep: `updateIslandSleep()` puts ALL bodies in an island to sleep simultaneously, only when every dynamic body in the island has `sleepFrames >= required`
+- [x] `solveIslands()`: sleeping islands are entirely skipped by the constraint + contact solver; warm-start also skips fully-sleeping pairs
+- [x] Integrator: accumulates `sleepFrames` but delegates final sleep decision to island manager
+- [x] 8 unit tests: isolated body, independent islands, wake-via-contact, connected bodies sleep together, constraint merges islands, sleeping island frozen by gravity, stack wakes as one unit, sleepFrames reset on wake
 
 ---
 

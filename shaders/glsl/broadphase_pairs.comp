@@ -1,0 +1,63 @@
+#version 450
+
+layout(local_size_x = 64) in;
+
+struct BodyShape {
+    vec4 aabbMin_invMass;
+    vec4 aabbMax_invInertiaX;
+    vec4 invInertiaYZ_shapeType_param0;
+    vec4 params;
+};
+
+struct Params {
+    vec4 gravity_dt;
+    vec4 counts;  // x=bodyCount_f, y=maxPairs_f
+};
+
+layout(std430, binding=0) readonly buffer ShapeBuffer { BodyShape shapes[]; };
+layout(std430, binding=1) coherent buffer PairsBuffer { uint pairsData[]; };
+// pairsData[0] = pair count (atomic), pairsData[1] = pad
+// pairsData[2 + k*2] = bodyA, pairsData[2 + k*2 + 1] = bodyB
+layout(std140, binding=2) uniform ParamBuffer { Params p; };
+
+// Map flat thread index to upper-triangle pair (i < j)
+void indexToPair(uint k, uint n, out uint i, out uint j) {
+    // Row i: i-th row has (n-1-i) entries starting at index i*(2n-i-1)/2
+    // Binary search for row i such that tri(i) <= k < tri(i+1)
+    // where tri(i) = i*(2n-i-1)/2
+    i = uint(floor((-1.0 + sqrt(1.0 + 8.0*float(k))) * 0.5));
+    j = k - i*(2u*n - i - 1u)/2u + i + 1u;
+    // Clamp to valid range
+    if (j >= n) { i = n - 1u; j = n; }
+}
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    uint n   = uint(p.counts.x);
+    if (n < 2u) return;
+
+    uint totalPairs = n * (n - 1u) / 2u;
+    if (idx >= totalPairs) return;
+
+    uint i, j;
+    indexToPair(idx, n, i, j);
+    if (i >= n || j >= n || j <= i) return;
+
+    vec3 minA = shapes[i].aabbMin_invMass.xyz;
+    vec3 maxA = shapes[i].aabbMax_invInertiaX.xyz;
+    vec3 minB = shapes[j].aabbMin_invMass.xyz;
+    vec3 maxB = shapes[j].aabbMax_invInertiaX.xyz;
+
+    // AABB overlap test
+    if (maxA.x < minB.x || maxB.x < minA.x) return;
+    if (maxA.y < minB.y || maxB.y < minA.y) return;
+    if (maxA.z < minB.z || maxB.z < minA.z) return;
+
+    // Atomically claim a pair slot
+    uint maxPairs = uint(p.counts.y);
+    uint slot = atomicAdd(pairsData[0], 1u);
+    if (slot >= maxPairs) return;
+
+    pairsData[2u + slot * 2u]      = i;
+    pairsData[2u + slot * 2u + 1u] = j;
+}

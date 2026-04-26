@@ -1,0 +1,80 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types : enable
+
+layout(local_size_x = 64) in;
+
+// GpuBodyState — 6×float4 = 96 bytes
+struct BodyState {
+    vec4 pos_p;      // pos.xyz + pad
+    vec4 rot;        // quaternion xyzw
+    vec4 predPos_p;  // predPos.xyz + pad
+    vec4 predRot;
+    vec4 vel_p;      // vel.xyz + pad
+    vec4 angVel_p;   // angVel.xyz + pad
+};
+
+// GpuBodyShape — 4×float4 = 64 bytes
+struct BodyShape {
+    vec4 aabbMin_invMass;        // aabb min xyz + invMass
+    vec4 aabbMax_invInertiaX;    // aabb max xyz + invInertiaX
+    vec4 invInertiaYZ_shapeType_param0; // invInertiaY, invInertiaZ, shapeType, param0
+    vec4 params;                 // param1, param2, param3, pad
+};
+
+struct Params {
+    vec4 gravity_dt;     // gravity.xyz + dt
+    vec4 counts;         // bodyCount_f, maxPairs_f, compliance, pad
+};
+
+layout(std430, binding=0) readonly buffer StateBuffer { BodyState states[]; };
+layout(std430, binding=1) buffer       ShapeBuffer { BodyShape shapes[]; };
+layout(std140, binding=2) uniform      ParamBuffer  { Params p; };
+
+void main() {
+    uint id = gl_GlobalInvocationID.x;
+    if (id >= uint(p.counts.x)) return;
+
+    vec3 pos     = states[id].pos_p.xyz;
+    vec4 rot     = states[id].rot;           // quaternion (x,y,z,w)
+    float stype  = shapes[id].invInertiaYZ_shapeType_param0.z;
+    float param0 = shapes[id].invInertiaYZ_shapeType_param0.w;
+    float param1 = shapes[id].params.x;
+    float param2 = shapes[id].params.y;
+
+    vec3 extent;
+    if (stype < 0.5) {
+        // Sphere: AABB is center ± radius
+        extent = vec3(param0, param0, param0);
+    } else if (stype < 1.5) {
+        // Box: rotate half-extents by quaternion and take abs sum per axis
+        // R_col_i = rotate(quat, basis_i); world extent = sum |R_col_i * h_i|
+        float qx = rot.x, qy = rot.y, qz = rot.z, qw = rot.w;
+        float hx = param0, hy = param1, hz = param2;
+        // Row-wise absolute rotation matrix contribution:
+        float m00 = abs(1.0 - 2.0*(qy*qy + qz*qz));
+        float m01 = abs(2.0*(qx*qy - qz*qw));
+        float m02 = abs(2.0*(qx*qz + qy*qw));
+        float m10 = abs(2.0*(qx*qy + qz*qw));
+        float m11 = abs(1.0 - 2.0*(qx*qx + qz*qz));
+        float m12 = abs(2.0*(qy*qz - qx*qw));
+        float m20 = abs(2.0*(qx*qz - qy*qw));
+        float m21 = abs(2.0*(qy*qz + qx*qw));
+        float m22 = abs(1.0 - 2.0*(qx*qx + qy*qy));
+        extent.x = m00*hx + m01*hy + m02*hz;
+        extent.y = m10*hx + m11*hy + m12*hz;
+        extent.z = m20*hx + m21*hy + m22*hz;
+    } else {
+        // Capsule (Y-axis aligned): radius + halfHeight along Y
+        float radius = param0, hh = param1;
+        float qx = rot.x, qy = rot.y, qz = rot.z, qw = rot.w;
+        // World-space Y axis after rotation:
+        vec3 yAxis = vec3(2.0*(qx*qy + qz*qw),
+                          1.0 - 2.0*(qx*qx + qz*qz),
+                          2.0*(qy*qz - qx*qw));
+        vec3 hAlongY = abs(yAxis) * hh;
+        extent = hAlongY + vec3(radius, radius, radius);
+    }
+
+    shapes[id].aabbMin_invMass.xyz     = pos - extent;
+    shapes[id].aabbMax_invInertiaX.xyz = pos + extent;
+}

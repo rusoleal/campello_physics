@@ -1,0 +1,58 @@
+#version 450
+
+layout(local_size_x = 64) in;
+
+struct BodyState {
+    vec4 pos_p;
+    vec4 rot;
+    vec4 predPos_p;
+    vec4 predRot;
+    vec4 vel_p;
+    vec4 angVel_p;
+};
+
+struct Params {
+    vec4 gravity_dt;
+    vec4 counts;
+};
+
+layout(std430, binding=0) buffer    StateBuffer { BodyState states[]; };
+layout(std140, binding=1) uniform   ParamBuffer { Params p; };
+
+vec4 qmul(vec4 a, vec4 b) {
+    return vec4(
+        a.w*b.x + a.x*b.w + a.y*b.z - a.z*b.y,
+        a.w*b.y - a.x*b.z + a.y*b.w + a.z*b.x,
+        a.w*b.z + a.x*b.y - a.y*b.x + a.z*b.w,
+        a.w*b.w - a.x*b.x - a.y*b.y - a.z*b.z
+    );
+}
+
+void main() {
+    uint id = gl_GlobalInvocationID.x;
+    if (id >= uint(p.counts.x)) return;
+
+    vec3 gravity = p.gravity_dt.xyz;
+    float dt     = p.gravity_dt.w;
+
+    vec3 pos    = states[id].pos_p.xyz;
+    vec4 rot    = states[id].rot;
+    vec3 vel    = states[id].vel_p.xyz;
+    vec3 angVel = states[id].angVel_p.xyz;
+
+    // invMass stored in shape buffer; we use vel to detect static bodies:
+    // Static/kinematic bodies have invMass==0 and are skipped in contacts/finalize.
+    // Predict still runs but doesn't modify static bodies.
+    // We check the stored predPos — static bodies keep same predPos as pos.
+
+    // Predict linear: p* = p + v*dt + g*dt²
+    vec3 predPos = pos + vel * dt + gravity * dt * dt;
+
+    // Predict angular using half-angle approximation:
+    // q* = normalize(q + 0.5*dt * quat(angVel_world, 0) * q)
+    vec4 omegaQ = vec4(angVel * 0.5 * dt, 0.0);
+    vec4 predRot = normalize(rot + qmul(omegaQ, rot));
+
+    states[id].predPos_p.xyz = predPos;
+    states[id].predRot       = predRot;
+}

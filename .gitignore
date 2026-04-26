@@ -1,0 +1,47 @@
+# Build directories
+build/
+build-*/
+build_*/
+out/
+cmake-build-*/
+
+# CMake generated
+CMakeCache.txt
+CMakeFiles/
+CMakeScripts/
+cmake_install.cmake
+install_manifest.txt
+CTestTestfile.cmake
+_deps/
+
+# Compiled output
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+*.lib
+*.exe
+
+# IDE / editor
+.vscode/
+.idea/
+*.xcodeproj/
+*.xcworkspace/
+*.suo
+*.user
+*.sln.docstates
+.vs/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Doxygen output
+docs/html/
+docs/latex/
+
+# Benchmark output
+*.csv
+*.json

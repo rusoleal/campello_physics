@@ -1,0 +1,63 @@
+#version 450
+
+layout(local_size_x = 64) in;
+
+struct BodyState {
+    vec4 pos_p;
+    vec4 rot;
+    vec4 predPos_p;
+    vec4 predRot;
+    vec4 vel_p;
+    vec4 angVel_p;
+};
+
+struct BodyShape {
+    vec4 aabbMin_invMass;
+    vec4 aabbMax_invInertiaX;
+    vec4 invInertiaYZ_shapeType_param0;
+    vec4 params;
+};
+
+struct Params {
+    vec4 gravity_dt;
+    vec4 counts;
+};
+
+layout(std430, binding=0) buffer StateBuffer { BodyState states[]; };
+layout(std140, binding=1) uniform ParamBuffer { Params p; };
+
+vec4 qconj(vec4 q) { return vec4(-q.x, -q.y, -q.z, q.w); }
+vec4 qmul(vec4 a, vec4 b) {
+    return vec4(
+        a.w*b.x + a.x*b.w + a.y*b.z - a.z*b.y,
+        a.w*b.y - a.x*b.z + a.y*b.w + a.z*b.x,
+        a.w*b.z + a.x*b.y - a.y*b.x + a.z*b.w,
+        a.w*b.w - a.x*b.x - a.y*b.y - a.z*b.z
+    );
+}
+
+void main() {
+    uint id = gl_GlobalInvocationID.x;
+    if (id >= uint(p.counts.x)) return;
+
+    float dt = p.gravity_dt.w;
+
+    vec3 pos      = states[id].pos_p.xyz;
+    vec4 rot      = states[id].rot;
+    vec3 predPos  = states[id].predPos_p.xyz;
+    vec4 predRot  = states[id].predRot;
+
+    // Velocity from position change
+    vec3 newVel = (predPos - pos) / dt;
+
+    // Angular velocity from rotation change: dq = predRot * conj(rot)
+    vec4 dq = qmul(predRot, qconj(rot));
+    if (dq.w < 0.0) dq = -dq;
+    vec3 newAngVel = 2.0 * dq.xyz / dt;
+
+    // Commit
+    states[id].pos_p.xyz   = predPos;
+    states[id].rot         = normalize(predRot);
+    states[id].vel_p.xyz   = newVel;
+    states[id].angVel_p.xyz = newAngVel;
+}

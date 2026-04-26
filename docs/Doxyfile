@@ -1,0 +1,62 @@
+
+# ── campello_physics Doxygen configuration ────────────────────────────────────
+# Run: doxygen docs/Doxyfile   (from the repository root)
+# Output: docs/html/index.html
+
+PROJECT_NAME           = "campello_physics"
+PROJECT_NUMBER         = "0.1.0"
+PROJECT_BRIEF          = "C++20 3D rigid-body physics engine"
+OUTPUT_DIRECTORY       = docs/generated
+
+# Input
+INPUT                  = include/campello_physics \
+                         README.md
+FILE_PATTERNS          = *.h *.hpp *.md
+RECURSIVE              = YES
+EXCLUDE_PATTERNS       = */build/* */_deps/*
+
+# Source browser
+SOURCE_BROWSER         = YES
+INLINE_SOURCES         = NO
+REFERENCED_BY_RELATION = YES
+REFERENCES_RELATION    = YES
+
+# Output formats
+GENERATE_HTML          = YES
+HTML_OUTPUT            = html
+GENERATE_LATEX         = NO
+
+# C++20 parsing
+CLANG_ASSISTED_PARSING = NO
+EXTENSION_MAPPING      = hpp=C++
+BUILTIN_STL_SUPPORT    = YES
+
+# Documentation style
+EXTRACT_ALL            = YES
+EXTRACT_PRIVATE        = NO
+EXTRACT_STATIC         = YES
+HIDE_UNDOC_MEMBERS     = NO
+SHOW_INCLUDE_FILES     = YES
+SHOW_NAMESPACES        = YES
+
+# Diagrams (requires Graphviz dot)
+HAVE_DOT               = YES
+CLASS_DIAGRAMS         = YES
+CLASS_GRAPH            = YES
+COLLABORATION_GRAPH    = NO
+INCLUDE_GRAPH          = YES
+INCLUDED_BY_GRAPH      = NO
+CALL_GRAPH             = NO
+CALLER_GRAPH           = NO
+DOT_IMAGE_FORMAT       = svg
+
+# Markdown
+USE_MDFILE_AS_MAINPAGE = README.md
+MARKDOWN_SUPPORT       = YES
+AUTOLINK_SUPPORT       = YES
+
+# Warnings
+WARNINGS               = YES
+WARN_IF_UNDOCUMENTED   = NO
+WARN_IF_DOC_ERROR      = YES
+WARN_LOGFILE           = docs/doxygen-warnings.log
