@@ -243,25 +243,25 @@ public:
     struct ContactSolverSoA {
         std::vector<uint32_t> bodyA, bodyB;
         // Normal Jacobians
-        alignas(16) std::vector<float> J_va_nx, J_va_ny, J_va_nz;
-        alignas(16) std::vector<float> J_wa_nx, J_wa_ny, J_wa_nz;
-        alignas(16) std::vector<float> J_vb_nx, J_vb_ny, J_vb_nz;
-        alignas(16) std::vector<float> J_wb_nx, J_wb_ny, J_wb_nz;
+        std::vector<float> J_va_nx, J_va_ny, J_va_nz;
+        std::vector<float> J_wa_nx, J_wa_ny, J_wa_nz;
+        std::vector<float> J_vb_nx, J_vb_ny, J_vb_nz;
+        std::vector<float> J_wb_nx, J_wb_ny, J_wb_nz;
         // Tangent 0 Jacobians
-        alignas(16) std::vector<float> J_va_t0x, J_va_t0y, J_va_t0z;
-        alignas(16) std::vector<float> J_wa_t0x, J_wa_t0y, J_wa_t0z;
-        alignas(16) std::vector<float> J_vb_t0x, J_vb_t0y, J_vb_t0z;
-        alignas(16) std::vector<float> J_wb_t0x, J_wb_t0y, J_wb_t0z;
+        std::vector<float> J_va_t0x, J_va_t0y, J_va_t0z;
+        std::vector<float> J_wa_t0x, J_wa_t0y, J_wa_t0z;
+        std::vector<float> J_vb_t0x, J_vb_t0y, J_vb_t0z;
+        std::vector<float> J_wb_t0x, J_wb_t0y, J_wb_t0z;
         // Tangent 1 Jacobians
-        alignas(16) std::vector<float> J_va_t1x, J_va_t1y, J_va_t1z;
-        alignas(16) std::vector<float> J_wa_t1x, J_wa_t1y, J_wa_t1z;
-        alignas(16) std::vector<float> J_vb_t1x, J_vb_t1y, J_vb_t1z;
-        alignas(16) std::vector<float> J_wb_t1x, J_wb_t1y, J_wb_t1z;
+        std::vector<float> J_va_t1x, J_va_t1y, J_va_t1z;
+        std::vector<float> J_wa_t1x, J_wa_t1y, J_wa_t1z;
+        std::vector<float> J_vb_t1x, J_vb_t1y, J_vb_t1z;
+        std::vector<float> J_wb_t1x, J_wb_t1y, J_wb_t1z;
         // Solver state
-        alignas(16) std::vector<float> effMassN, effMassT0, effMassT1;
-        alignas(16) std::vector<float> biasN;
-        alignas(16) std::vector<float> friction;
-        alignas(16) std::vector<float> lambdaN, lambdaT0, lambdaT1;
+        std::vector<float> effMassN, effMassT0, effMassT1;
+        std::vector<float> biasN;
+        std::vector<float> friction;
+        std::vector<float> lambdaN, lambdaT0, lambdaT1;
         // Color-major ordering metadata (built from m_globalContactColors)
         std::vector<int> colorOffsets;   // start index in SoA for each color
         std::vector<int> colorCounts;    // number of contacts in each color
@@ -310,11 +310,11 @@ public:
     // SoA constraint row solver data (populated from constraints each substep)
     struct ConstraintRowSoA {
         std::vector<uint32_t> bodyA, bodyB;
-        alignas(16) std::vector<float> J_va_x, J_va_y, J_va_z;
-        alignas(16) std::vector<float> J_wa_x, J_wa_y, J_wa_z;
-        alignas(16) std::vector<float> J_vb_x, J_vb_y, J_vb_z;
-        alignas(16) std::vector<float> J_wb_x, J_wb_y, J_wb_z;
-        alignas(16) std::vector<float> effMass, bias, lambdaMin, lambdaMax, lambda;
+        std::vector<float> J_va_x, J_va_y, J_va_z;
+        std::vector<float> J_wa_x, J_wa_y, J_wa_z;
+        std::vector<float> J_vb_x, J_vb_y, J_vb_z;
+        std::vector<float> J_wb_x, J_wb_y, J_wb_z;
+        std::vector<float> effMass, bias, lambdaMin, lambdaMax, lambda;
         std::vector<int> colorOffsets;
         std::vector<int> colorCounts;
         std::vector<int> rowIndex; // maps SoA index -> (constraint, row) via m_constraintRowMap

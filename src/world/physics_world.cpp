@@ -727,7 +727,7 @@ inline __m128 mm_dot3_4wide(const float* ax, const float* ay, const float* az,
 
 // Solve 4 contacts simultaneously using SSE for dot products & clamping.
 // Body velocity updates remain scalar (applyImpulseRow handles invMass/static).
-[[maybe_unused]] __attribute__((always_inline)) inline void solveContactBatch4Sse(
+[[maybe_unused]] CAMPELLO_FORCE_INLINE void solveContactBatch4Sse(
         campello::physics::PhysicsWorld::ContactSolverSoA& soa,
         campello::physics::BodyPool& pool, int i) {
     using namespace campello::physics;
@@ -857,7 +857,7 @@ inline __m128 mm_dot3_4wide(const float* ax, const float* ay, const float* az,
 }
 
 // Solve 4 constraint rows simultaneously using SSE.
-[[maybe_unused]] __attribute__((always_inline)) inline void solveConstraintBatch4Sse(
+[[maybe_unused]] CAMPELLO_FORCE_INLINE void solveConstraintBatch4Sse(
         campello::physics::PhysicsWorld::ConstraintRowSoA& soa,
         campello::physics::BodyPool& pool, int i) {
     using namespace campello::physics;
