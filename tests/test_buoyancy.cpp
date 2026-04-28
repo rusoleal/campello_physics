@@ -25,7 +25,7 @@ TEST(Buoyancy, SphereLessDenseThanWaterFloats) {
     fluid.fluidDensity = 1000.f;
     fluid.linearDrag   = 2.0f;
     fluid.angularDrag  = 1.0f;
-    world.addBuoyancyVolume(fluid);
+    [[maybe_unused]] auto unused = world.addBuoyancyVolume(fluid);
 
     // Sphere radius 0.5, mass 0.1 → density ≈ 191 kg/m³ < 1000 → should float
     BodyDescriptor bd;

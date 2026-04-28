@@ -211,6 +211,36 @@ TEST(Dynamics, QuaternionNormalization) {
     EXPECT_NEAR(lenSq, 1.f, 1e-5f);
 }
 
+// activeDynamicIds tracks only active Dynamic bodies
+TEST(Dynamics, ActiveDynamicIds) {
+    BodyPool pool;
+
+    EXPECT_TRUE(pool.activeDynamicIds().empty());
+
+    auto dyn1 = pool.createBody(dynamicDesc(1.f));
+    auto dyn2 = pool.createBody(dynamicDesc(2.f));
+
+    EXPECT_EQ(pool.activeDynamicIds().size(), 2u);
+    EXPECT_EQ(pool.activeDynamicIds()[0], dyn1.id());
+    EXPECT_EQ(pool.activeDynamicIds()[1], dyn2.id());
+
+    BodyDescriptor staticDesc;
+    staticDesc.type = BodyType::Static;
+    auto stat = pool.createBody(staticDesc);
+
+    EXPECT_EQ(pool.activeDynamicIds().size(), 2u);
+
+    pool.destroyBody(dyn1);
+    EXPECT_EQ(pool.activeDynamicIds().size(), 1u);
+    EXPECT_EQ(pool.activeDynamicIds()[0], dyn2.id());
+
+    pool.destroyBody(stat);
+    EXPECT_EQ(pool.activeDynamicIds().size(), 1u);
+
+    pool.destroyBody(dyn2);
+    EXPECT_TRUE(pool.activeDynamicIds().empty());
+}
+
 // applyForceAt produces torque (angular velocity grows)
 TEST(Dynamics, ForceAtProducesTorque) {
     BodyPool pool;

@@ -121,7 +121,7 @@ static const float kWheelAttachY    = -0.25f;   // chassis local Y of attachment
         d.type  = phys::BodyType::Static;
         d.shape = std::make_shared<phys::BoxShape>(vm::Vector3<float>(50.f, 0.5f, 50.f));
         d.transform.position = {0.f, -0.5f, 0.f};
-        _world.createBody(d);
+        (void)_world.createBody(d);
         // Scale the floor GLTF node to match the 100×100m physics body
         if (_gltf->nodes && !_gltf->nodes->empty()) {
             auto& floorNode = (*_gltf->nodes)[0];

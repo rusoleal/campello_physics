@@ -5,6 +5,31 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.2.0] — 2026-04-28
+
+### Added
+
+- **Generation counters on `Body` handles**: `Body` now stores a `generation` counter; `BodyPool` increments it on destroy. Stale handles correctly report `isValid() == false` even after pool-slot reuse. `PhysicsWorld::destroyBody()` and `BodyPool::destroyBody(Body)` are now no-ops on invalid handles.
+- **Fuzz / adversarial test suite** (`tests/test_fuzz.cpp`): 20 tests covering zero-mass dynamics, NaN/Inf states, degenerate shapes (zero-radius sphere, zero-extent box), identical overlapping bodies, 1:1e6 mass ratios, negative damping, null shapes, random impulse spam, same-body constraints, extreme restitution/friction, massive deep penetration, extreme solver iterations, rapid create/destroy cycles, sleep/wake churn, and serialization of degenerate worlds.
+
+### Fixed
+
+- **ASan container-overflow** in `PhysicsWorld::buildContactSoA()`: when `m_contactPoints` was empty but constraints still existed (e.g., constraint-chain stress tests), stale `m_globalContactColors` from a previous frame caused out-of-bounds writes. Added an early-return guard when `n == 0`.
+
+### Changed
+
+- **GPU dependency**: `campello_gpu` upgraded from v0.9.0 to v0.13.0.
+
+---
+
+## [1.1.0] — 2026-04-27
+
+### Added
+
+- **WebAssembly (Emscripten) support**: `CAMPELLO_PLATFORM_WASM`, pthreads-enabled builds, SIMD128, CI job via `mymindstorm/setup-emsdk`, `scripts/build_wasm.sh` convenience script
+
+---
+
 ## [1.0.0] — 2026-04-26
 
 First stable release. All planned phases complete.
@@ -103,14 +128,12 @@ First stable release. All planned phases complete.
 
 **GPU Compute (Phase 14 — experimental)**
 - `PhysicsBackend` enum `{Cpu, Gpu, Auto}`; `world.setBackend()`, `world.setGpuBodyThreshold()`
-- `IGpuBackend` interface; `GpuPhysicsBackend` backed by `campello_gpu` v0.9.0
+- `IGpuBackend` interface; `GpuPhysicsBackend` backed by `campello_gpu` v0.13.0
 - Five GPU kernels (broadphase AABB update, O(N²) pair detection, XPBD predict/contact-solve/finalize)
 - Shader compilation for macOS/iOS (Metal), Linux/Android (SPIR-V), Windows (HLSL)
 - Note: GPU path uses XPBD (behavior differs from CPU SI path); contact events not dispatched on GPU; broadphase is O(N²), suitable for ≤ ~2000 bodies
 
 ### Known Limitations
-- No fuzz/adversarial input testing
 - GPU broadphase O(N²) — sort+sweep deferred
 - GPU particle and soft-body simulation deferred
 - No deterministic cross-platform fixed-point mode
-- Stale `Body` handles may appear valid after pool-slot reuse (no generation counter)

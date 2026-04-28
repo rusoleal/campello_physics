@@ -113,7 +113,7 @@ TEST(PhysicsWorldDebugDraw, SphereBodyDrawsShapeLines) {
     desc.type  = BodyType::Dynamic;
     desc.shape = std::make_shared<SphereShape>(0.5f);
     desc.mass  = 1.f;
-    world.createBody(desc);
+    [[maybe_unused]] auto unused = world.createBody(desc);
 
     RecordingDraw draw;
     world.debugDraw(draw, DebugDrawFlags::BodyShapes);
@@ -125,7 +125,7 @@ TEST(PhysicsWorldDebugDraw, AABBFlagDrawsMore) {
     BodyDescriptor desc;
     desc.type  = BodyType::Static;
     desc.shape = std::make_shared<BoxShape>(vm::Vector3<float>(1.f, 1.f, 1.f));
-    world.createBody(desc);
+    [[maybe_unused]] auto unused = world.createBody(desc);
 
     RecordingDraw drawShapes, drawBoth;
     world.debugDraw(drawShapes, DebugDrawFlags::BodyShapes);
@@ -140,7 +140,7 @@ TEST(PhysicsWorldDebugDraw, NoneDrawsNothing) {
     desc.type  = BodyType::Dynamic;
     desc.shape = std::make_shared<SphereShape>(1.f);
     desc.mass  = 1.f;
-    world.createBody(desc);
+    [[maybe_unused]] auto unused = world.createBody(desc);
 
     RecordingDraw draw;
     world.debugDraw(draw, DebugDrawFlags::None);
@@ -154,7 +154,7 @@ TEST(PhysicsWorldDebugDraw, VelocityArrowsAppear) {
     desc.type  = BodyType::Dynamic;
     desc.shape = std::make_shared<SphereShape>(0.5f);
     desc.mass  = 1.f;
-    world.createBody(desc);
+    [[maybe_unused]] auto unused = world.createBody(desc);
     world.step(1.f / 6.f);  // let it fall and gain speed
 
     RecordingDraw noVel, withVel;
@@ -175,7 +175,7 @@ TEST(PhysicsWorldDebugDraw, CompoundShapeDrawsChildren) {
     desc.type  = BodyType::Dynamic;
     desc.shape = comp;
     desc.mass  = 1.f;
-    world.createBody(desc);
+    [[maybe_unused]] auto unused = world.createBody(desc);
 
     RecordingDraw draw;
     world.debugDraw(draw, DebugDrawFlags::BodyShapes);
@@ -225,7 +225,7 @@ TEST(IPhysicsProfiler, WorldStepFiresProfilerScopes) {
     desc.type  = BodyType::Dynamic;
     desc.shape = std::make_shared<SphereShape>(0.5f);
     desc.mass  = 1.f;
-    world.createBody(desc);
+    [[maybe_unused]] auto unused = world.createBody(desc);
 
     world.step(1.f / 60.f);
     // Expect at least BroadPhase, NarrowPhase, Solver, Integrate scopes

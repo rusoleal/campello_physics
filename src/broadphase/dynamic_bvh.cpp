@@ -1,7 +1,6 @@
 #include "dynamic_bvh.h"
 #include <cassert>
 #include <cmath>
-#include <stack>
 #include <vector>
 
 namespace campello::physics {
@@ -155,93 +154,6 @@ bool DynamicBVH::update(NodeId& node, int bodyId, const AABB& tightAABB) {
     remove(node);
     node = insert(bodyId, tightAABB);
     return true;
-}
-
-void DynamicBVH::query(const AABB& aabb, int excludeBodyId,
-                       const std::function<void(int)>& cb) const
-{
-    if (m_root == kNullNode) return;
-
-    std::stack<int> stack;
-    stack.push(m_root);
-
-    while (!stack.empty()) {
-        int idx = stack.top(); stack.pop();
-        const Node& n = m_nodes[idx];
-        if (!n.fatAABB.intersects(aabb)) continue;
-        if (n.isLeaf()) {
-            if (n.bodyId != excludeBodyId)
-                cb(n.bodyId);
-        } else {
-            stack.push(n.left);
-            stack.push(n.right);
-        }
-    }
-}
-
-void DynamicBVH::forEachLeaf(const std::function<void(int, const AABB&)>& cb) const {
-    if (m_root == kNullNode) return;
-
-    std::stack<int> stack;
-    stack.push(m_root);
-
-    while (!stack.empty()) {
-        int idx = stack.top(); stack.pop();
-        const Node& n = m_nodes[idx];
-        if (n.isLeaf())
-            cb(n.bodyId, n.fatAABB);
-        else {
-            stack.push(n.left);
-            stack.push(n.right);
-        }
-    }
-}
-
-static bool rayAABB(const vm::Vector3<float>& origin,
-                    const vm::Vector3<float>& invDir,
-                    float maxT,
-                    const AABB& aabb) noexcept
-{
-    float tNear = 0.f, tFar = maxT;
-    for (int i = 0; i < 3; ++i) {
-        float o = (i == 0) ? origin.x() : (i == 1 ? origin.y() : origin.z());
-        float d = (i == 0) ? invDir.x()  : (i == 1 ? invDir.y()  : invDir.z());
-        float mn = (i == 0) ? aabb.min.x() : (i == 1 ? aabb.min.y() : aabb.min.z());
-        float mx = (i == 0) ? aabb.max.x() : (i == 1 ? aabb.max.y() : aabb.max.z());
-        float t1 = (mn - o) * d;
-        float t2 = (mx - o) * d;
-        if (t1 > t2) { float tmp = t1; t1 = t2; t2 = tmp; }
-        tNear = tNear > t1 ? tNear : t1;
-        tFar  = tFar  < t2 ? tFar  : t2;
-        if (tFar < tNear) return false;
-    }
-    return tFar >= 0.f && tNear <= maxT;
-}
-
-void DynamicBVH::queryRay(const vm::Vector3<float>& origin,
-                           const vm::Vector3<float>& invDir,
-                           float maxT,
-                           int excludeBodyId,
-                           const std::function<void(int)>& cb) const
-{
-    if (m_root == kNullNode) return;
-
-    std::vector<int> stack;
-    stack.reserve(32);
-    stack.push_back(m_root);
-
-    while (!stack.empty()) {
-        int idx = stack.back(); stack.pop_back();
-        const Node& n = m_nodes[idx];
-        if (!rayAABB(origin, invDir, maxT, n.fatAABB)) continue;
-        if (n.isLeaf()) {
-            if (n.bodyId != excludeBodyId)
-                cb(n.bodyId);
-        } else {
-            stack.push_back(n.left);
-            stack.push_back(n.right);
-        }
-    }
 }
 
 } // namespace campello::physics

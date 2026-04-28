@@ -1,0 +1,9 @@
+prefix=@CMAKE_INSTALL_PREFIX@
+includedir=${prefix}/@CMAKE_INSTALL_INCLUDEDIR@
+libdir=${prefix}/@CMAKE_INSTALL_LIBDIR@
+
+Name: campello_physics
+Description: C++20 3D physics engine
+Version: @PROJECT_VERSION@
+Libs: -L${libdir} -lcampello_physics
+Cflags: -I${includedir}

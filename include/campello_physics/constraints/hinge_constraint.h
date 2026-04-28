@@ -25,6 +25,10 @@ public:
     void solveVelocity(BodyPool& pool) override;
     void solvePosition(BodyPool& pool, float dt, float alpha) override;
 
+    [[nodiscard]] int rowCount() const override { return m_rowCount; }
+    [[nodiscard]] const ConstraintRow* rows() const override { return m_rows; }
+    ConstraintRow* rows() override { return m_rows; }
+
 private:
     HingeConstraint() = default;
 

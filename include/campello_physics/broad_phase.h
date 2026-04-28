@@ -4,7 +4,6 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
-#include <unordered_map>
 #include <vector>
 
 namespace campello::physics {
@@ -63,13 +62,14 @@ private:
     // Forward-declare the BVH types to avoid exposing the internal header.
     struct Impl;
     struct ProxyData {
-        int      nodeValue;  // DynamicBVH::NodeId.value
-        uint32_t layer;
-        uint32_t mask;
-        bool     isStatic;
+        int      nodeValue = -1;  // DynamicBVH::NodeId.value, -1 = invalid
+        uint32_t layer     = 0xFFFFFFFF;
+        uint32_t mask      = 0xFFFFFFFF;
+        bool     isStatic  = false;
+        bool     valid     = false;
     };
 
-    std::unordered_map<uint32_t, ProxyData> m_proxies;
+    std::vector<ProxyData> m_proxies;
     std::vector<CollisionPair>              m_previous;
     std::vector<CollisionPair>              m_current;
     std::vector<CollisionPair>              m_added;

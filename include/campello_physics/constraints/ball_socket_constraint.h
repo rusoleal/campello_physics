@@ -17,6 +17,10 @@ public:
     void solveVelocity(BodyPool& pool) override;
     void solvePosition(BodyPool& pool, float dt, float alpha) override;
 
+    [[nodiscard]] int rowCount() const override { return 3; }
+    [[nodiscard]] const ConstraintRow* rows() const override { return m_rows; }
+    ConstraintRow* rows() override { return m_rows; }
+
 private:
     BallSocketConstraint() = default;
 

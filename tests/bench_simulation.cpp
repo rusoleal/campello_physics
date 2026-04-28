@@ -17,7 +17,7 @@ static void addFloor(PhysicsWorld& world) {
     d.type  = BodyType::Static;
     d.shape = std::make_shared<BoxShape>(V3(200.f, 0.5f, 200.f));
     d.transform.position = V3(0.f, -0.5f, 0.f);
-    world.createBody(d);
+    [[maybe_unused]] auto unused = world.createBody(d);
 }
 
 // Place N spheres in an XZ grid at height y.
@@ -39,7 +39,7 @@ static void addSphereGrid(PhysicsWorld& world, int count,
             (float(ix) - cols * 0.5f) * spacing,
             y + float(iy) * spacing,
             (float(iz) - cols * 0.5f) * spacing);
-        world.createBody(d);
+        [[maybe_unused]] auto unused = world.createBody(d);
     }
 }
 

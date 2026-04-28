@@ -125,6 +125,31 @@ cmake --build build-android
 
 ---
 
+## WebAssembly (Emscripten)
+
+Cross-compile from any host with the [Emscripten SDK](https://emscripten.org/docs/getting_started/downloads.html) installed.
+
+```bash
+# Activate emsdk in your shell (once per session)
+source /path/to/emsdk/emsdk_env.sh
+
+# Configure and build (library + tests)
+emcmake cmake -B build-wasm -S . \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCAMPELLO_PHYSICS_BUILD_TESTS=ON
+cmake --build build-wasm --parallel
+
+# Run tests under Node.js (Node 18+ required for pthreads/WASM threads)
+cd build-wasm && ctest --output-on-failure
+```
+
+**Notes:**
+- Examples (`CAMPELLO_PHYSICS_BUILD_EXAMPLES`) and GPU backend (`CAMPELLO_PHYSICS_GPU`) are automatically disabled on WASM.
+- Pthreads are enabled by default for multi-threaded broadphase/narrowphase.
+- Node.js ≥ 18 is recommended; older versions may require `--experimental-wasm-threads`.
+
+---
+
 ## CMake options reference
 
 | Option | Default | Description |

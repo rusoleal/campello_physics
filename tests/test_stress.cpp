@@ -177,7 +177,7 @@ TEST(Stress, HighVelocityCollision) {
     wd.mass      = 0.f;
     wd.transform = { {10.f, 0.f, 0.f}, Q::identity() };
     wd.shape     = std::make_shared<BoxShape>(V3(0.5f, 5.f, 5.f));
-    w.createBody(wd);
+    [[maybe_unused]] auto unused = w.createBody(wd);
 
     // Fast sphere
     Body s = makeSphere(w, 0.5f, 1.f, {0.f, 0.f, 0.f});

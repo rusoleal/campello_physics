@@ -42,6 +42,9 @@ add_executable(campello_physics_tests
     # Stress / torture
     test_stress.cpp
 
+    # Fuzz / adversarial
+    test_fuzz.cpp
+
     # Phase 13
     test_debug_draw.cpp
     test_serialization.cpp
@@ -59,6 +62,16 @@ target_link_libraries(campello_physics_tests
 )
 
 include(GoogleTest)
+if(EMSCRIPTEN)
+    # Defer test discovery to test-runtime so we don't need to execute
+    # the cross-compiled .js binary at configure time.
+    set(CMAKE_GTEST_DISCOVER_TESTS_DISCOVERY_MODE PRE_TEST)
+    # Make sure CTest knows to run wasm binaries via Node.js.
+    if(NOT CMAKE_CROSSCOMPILING_EMULATOR)
+        find_program(NODE_EXECUTABLE NAMES node nodejs REQUIRED)
+        set(CMAKE_CROSSCOMPILING_EMULATOR ${NODE_EXECUTABLE})
+    endif()
+endif()
 gtest_discover_tests(campello_physics_tests)
 
 if(CAMPELLO_PHYSICS_BUILD_BENCHMARKS)

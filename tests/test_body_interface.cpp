@@ -105,8 +105,8 @@ TEST(BodyInterface, StepAndCreate_SerializedWithoutCorruption) {
     world.setGravity({ 0.f, 0.f, 0.f });
 
     // Pre-populate two bodies so there is something to step.
-    world.bodyInterface().createBody(makeDynamicDesc(0.f));
-    world.bodyInterface().createBody(makeDynamicDesc(2.f));
+    [[maybe_unused]] auto unused0 = world.bodyInterface().createBody(makeDynamicDesc(0.f));
+    [[maybe_unused]] auto unused1 = world.bodyInterface().createBody(makeDynamicDesc(2.f));
 
     constexpr int kSteps   = 60;
     constexpr int kCreates = 20;
@@ -326,7 +326,7 @@ TEST(BodyInterface, ConcurrentStepAndMutate_SerializedCorrectly) {
     world.setGravity({0.f, -9.81f, 0.f});
 
     for (int i = 0; i < 10; ++i)
-        world.bodyInterface().createBody(makeDynamicDesc(float(i)));
+        [[maybe_unused]] auto unused = world.bodyInterface().createBody(makeDynamicDesc(float(i)));
 
     std::atomic<bool> done{false};
     std::atomic<int>  mutations{0};
@@ -351,4 +351,89 @@ TEST(BodyInterface, ConcurrentStepAndMutate_SerializedCorrectly) {
     EXPECT_GT(mutations.load(), 0);
     // World must still be in a valid state
     EXPECT_GT(world.bodyPool().activeCount(), 0u);
+}
+
+// ── Generation counter (stale-handle safety) ──────────────────────────────────
+
+TEST(BodyInterface, StaleHandleBecomesInvalidOnReuse) {
+    PhysicsWorld world;
+
+    // Create and destroy a body, keeping the old handle.
+    Body oldHandle = world.bodyInterface().createBody(makeDynamicDesc());
+    EXPECT_TRUE(oldHandle.isValid());
+    uint32_t oldId = oldHandle.id();
+
+    world.bodyInterface().destroyBody(oldHandle);
+    EXPECT_FALSE(oldHandle.isValid());
+
+    // Create a new body that reuses the same pool slot.
+    Body newHandle = world.bodyInterface().createBody(makeDynamicDesc());
+    EXPECT_TRUE(newHandle.isValid());
+    EXPECT_EQ(newHandle.id(), oldId);               // same slot
+    EXPECT_NE(newHandle.generation(), oldHandle.generation()); // different generation
+    EXPECT_FALSE(oldHandle.isValid());              // old handle is still invalid
+}
+
+TEST(BodyInterface, StaleHandleNotEqualToNewHandle) {
+    PhysicsWorld world;
+
+    Body oldHandle = world.bodyInterface().createBody(makeDynamicDesc());
+    world.bodyInterface().destroyBody(oldHandle);
+
+    Body newHandle = world.bodyInterface().createBody(makeDynamicDesc());
+    EXPECT_EQ(oldHandle.id(), newHandle.id());
+    EXPECT_NE(oldHandle.generation(), newHandle.generation());
+    EXPECT_FALSE(oldHandle == newHandle);
+    EXPECT_TRUE(oldHandle != newHandle);
+}
+
+TEST(BodyInterface, DestroyingStaleHandleIsNoOp) {
+    PhysicsWorld world;
+
+    Body oldHandle = world.bodyInterface().createBody(makeDynamicDesc());
+    world.bodyInterface().destroyBody(oldHandle);
+
+    // New body reuses the slot.
+    Body newHandle = world.bodyInterface().createBody(makeDynamicDesc());
+    EXPECT_TRUE(newHandle.isValid());
+
+    // Destroying the stale handle must not affect the new body.
+    world.bodyInterface().destroyBody(oldHandle);
+    EXPECT_TRUE(newHandle.isValid());
+    EXPECT_EQ(world.bodyPool().activeCount(), 1u);
+}
+
+TEST(BodyInterface, DoubleDestroyIsSafe) {
+    PhysicsWorld world;
+
+    Body b = world.bodyInterface().createBody(makeDynamicDesc());
+    EXPECT_TRUE(b.isValid());
+
+    world.bodyInterface().destroyBody(b);
+    EXPECT_FALSE(b.isValid());
+
+    // Second destroy on the same handle must be a no-op.
+    world.bodyInterface().destroyBody(b);
+    EXPECT_FALSE(b.isValid());
+    EXPECT_EQ(world.bodyPool().activeCount(), 0u);
+}
+
+TEST(BodyInterface, GenerationIncrementsOnEachReuse) {
+    PhysicsWorld world;
+
+    Body h1 = world.bodyInterface().createBody(makeDynamicDesc());
+    uint32_t gen1 = h1.generation();
+    uint32_t id   = h1.id();
+
+    world.bodyInterface().destroyBody(h1);
+
+    Body h2 = world.bodyInterface().createBody(makeDynamicDesc());
+    EXPECT_EQ(h2.id(), id);
+    EXPECT_EQ(h2.generation(), gen1 + 1);
+
+    world.bodyInterface().destroyBody(h2);
+
+    Body h3 = world.bodyInterface().createBody(makeDynamicDesc());
+    EXPECT_EQ(h3.id(), id);
+    EXPECT_EQ(h3.generation(), gen1 + 2);
 }

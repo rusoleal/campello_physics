@@ -47,6 +47,11 @@ public:
     [[nodiscard]] Body bodyA() const noexcept { return m_bodyA; }
     [[nodiscard]] Body bodyB() const noexcept { return m_bodyB; }
 
+    // Row access for batch solvers.
+    [[nodiscard]] virtual int rowCount() const { return 0; }
+    [[nodiscard]] virtual const ConstraintRow* rows() const { return nullptr; }
+    virtual ConstraintRow* rows() { return nullptr; }
+
 protected:
     Body m_bodyA, m_bodyB;
 };

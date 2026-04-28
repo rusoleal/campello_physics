@@ -47,7 +47,8 @@ public:
     Body() = default;
 
     [[nodiscard]] bool     isValid() const noexcept;
-    [[nodiscard]] uint32_t id()      const noexcept { return m_id; }
+    [[nodiscard]] uint32_t id()         const noexcept { return m_id; }
+    [[nodiscard]] uint32_t generation() const noexcept { return m_generation; }
 
     // ── State getters ─────────────────────────────────────────────────────────
     [[nodiscard]] BodyType           type()            const noexcept;
@@ -84,15 +85,19 @@ public:
     void sleep() noexcept;
 
     // ── Equality ──────────────────────────────────────────────────────────────
-    bool operator==(const Body& o) const noexcept { return m_id == o.m_id && m_pool == o.m_pool; }
+    bool operator==(const Body& o) const noexcept {
+        return m_id == o.m_id && m_generation == o.m_generation && m_pool == o.m_pool;
+    }
     bool operator!=(const Body& o) const noexcept { return !(*this == o); }
 
 private:
-    explicit Body(uint32_t id, BodyPool* pool) noexcept : m_id(id), m_pool(pool) {}
+    explicit Body(uint32_t id, uint32_t generation, BodyPool* pool) noexcept
+        : m_id(id), m_generation(generation), m_pool(pool) {}
     friend class BodyPool;
 
-    uint32_t  m_id   = ~uint32_t(0);
-    BodyPool* m_pool = nullptr;
+    uint32_t  m_id         = ~uint32_t(0);
+    uint32_t  m_generation = 0;
+    BodyPool* m_pool       = nullptr;
 };
 
 } // namespace campello::physics

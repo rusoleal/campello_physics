@@ -4,6 +4,7 @@
 #include "gpu/gpu_physics_backend.h"
 #endif
 #include "buoyancy_system.h"
+#include "foundation/thread_pool.h"
 #include "articulated_body_system.h"
 #include <campello_physics/ragdoll.h>
 #include "vehicle_system.h"
@@ -12,6 +13,13 @@
 #include <mutex>
 #include <thread>
 #include <vector>
+#include "constraints/constraint_utils.h"
+
+#if defined(__SSE__) || defined(__AVX__)
+    #include <immintrin.h>
+#elif defined(__ARM_NEON) || defined(__ARM_NEON__)
+    #include <arm_neon.h>
+#endif
 
 namespace campello::physics {
 
@@ -39,14 +47,6 @@ inline vm::Vector3<float> norm3(const vm::Vector3<float>& v) {
     return l > 1e-20f ? v * (1.f / l) : vm::Vector3<float>(1.f, 0.f, 0.f);
 }
 
-inline vm::Vector3<float> applyInvInertia(const BodyData& d, const vm::Vector3<float>& v) {
-    const auto& R   = d.transform.rotation;
-    const auto  loc = R.conjugated().rotated(v);
-    const auto& inv = d.invInertiaTensorLocal;
-    return R.rotated(vm::Vector3<float>(
-        loc.x() * inv.x(), loc.y() * inv.y(), loc.z() * inv.z()));
-}
-
 inline void perp3(const vm::Vector3<float>& n,
                   vm::Vector3<float>& t0, vm::Vector3<float>& t1) {
     float ax = std::abs(n.x()), ay = std::abs(n.y()), az = std::abs(n.z());
@@ -64,8 +64,8 @@ inline float computeEffMassRow(const BodyData& da, const BodyData& db,
                                 const vm::Vector3<float>& Jvb,
                                 const vm::Vector3<float>& Jwb) {
     float K = dot3(Jva, Jva) * da.invMass + dot3(Jvb, Jvb) * db.invMass
-            + dot3(Jwa, applyInvInertia(da, Jwa))
-            + dot3(Jwb, applyInvInertia(db, Jwb));
+            + dot3(Jwa, detail::applyInvInertiaWorld(da, Jwa))
+            + dot3(Jwb, detail::applyInvInertiaWorld(db, Jwb));
     return K > 1e-12f ? 1.f / K : 0.f;
 }
 
@@ -76,9 +76,9 @@ inline void applyImpulseRow(BodyData& da, BodyData& db,
                              const vm::Vector3<float>& Jwb,
                              float dL) {
     da.linearVelocity  = da.linearVelocity  + Jva * (dL * da.invMass);
-    da.angularVelocity = da.angularVelocity + applyInvInertia(da, Jwa * dL);
+    da.angularVelocity = da.angularVelocity + detail::applyInvInertiaWorld(da, Jwa * dL);
     db.linearVelocity  = db.linearVelocity  + Jvb * (dL * db.invMass);
-    db.angularVelocity = db.angularVelocity + applyInvInertia(db, Jwb * dL);
+    db.angularVelocity = db.angularVelocity + detail::applyInvInertiaWorld(db, Jwb * dL);
 }
 
 inline void applyPosImpulse(BodyData& d,
@@ -89,6 +89,42 @@ inline void applyPosImpulse(BodyData& d,
     d.transform.position = d.transform.position + Jv * (lam * d.invMass);
 }
 
+// Fast-path AABB for the two most common primitive shapes.
+// Falls back to virtual dispatch for everything else.
+inline AABB computeBodyAABB(const Shape* shape, const Transform& transform) {
+    if (!shape)
+        return AABB{ transform.position, transform.position };
+
+    switch (shape->type()) {
+        case ShapeType::Sphere: {
+            const auto* s = static_cast<const SphereShape*>(shape);
+            const float r = s->radius();
+            return AABB::fromCenterHalfExtents(transform.position,
+                                               vm::Vector3<float>(r, r, r));
+        }
+        case ShapeType::Box: {
+            const auto* b = static_cast<const BoxShape*>(shape);
+            const float hx = b->halfExtents().x();
+            const float hy = b->halfExtents().y();
+            const float hz = b->halfExtents().z();
+            auto ax = transform.rotation.rotated(vm::Vector3<float>(hx, 0.f, 0.f));
+            auto ay = transform.rotation.rotated(vm::Vector3<float>(0.f, hy, 0.f));
+            auto az = transform.rotation.rotated(vm::Vector3<float>(0.f, 0.f, hz));
+            vm::Vector3<float> he(
+                std::fabs(ax.x()) + std::fabs(ay.x()) + std::fabs(az.x()),
+                std::fabs(ax.y()) + std::fabs(ay.y()) + std::fabs(az.y()),
+                std::fabs(ax.z()) + std::fabs(ay.z()) + std::fabs(az.z()));
+            return AABB::fromCenterHalfExtents(transform.position, he);
+        }
+        default:
+            return shape->computeAABB(transform);
+    }
+}
+
+inline AABB computeBodyAABB(const BodyData& d) {
+    return computeBodyAABB(d.shape.get(), d.transform);
+}
+
 } // namespace
 
 // ── PhysicsWorld ──────────────────────────────────────────────────────────────
@@ -96,8 +132,16 @@ inline void applyPosImpulse(BodyData& d,
 PhysicsWorld::PhysicsWorld()
     : m_buoyancySystem(std::make_unique<BuoyancySystem>())
     , m_articulatedBodySystem(std::make_unique<ArticulatedBodySystem>())
-    , m_vehicleSystem(std::make_unique<VehicleSystem>()) {
+    , m_vehicleSystem(std::make_unique<VehicleSystem>())
+    , m_threadPool(std::make_unique<ThreadPool>(1)) {
     m_constraintSolver.iterations = constraintIterations;
+}
+
+void PhysicsWorld::setWorkerThreads(int n) noexcept {
+    int desired = n > 1 ? n : 1;
+    if (desired == m_workerThreads) return;
+    m_workerThreads = desired;
+    m_threadPool = std::make_unique<ThreadPool>(desired);
 }
 
 PhysicsWorld::~PhysicsWorld() = default;
@@ -129,13 +173,7 @@ Body PhysicsWorld::createBody(const BodyDescriptor& desc) {
     Body body = m_pool.createBody(desc);
     uint32_t id = body.id();
 
-    AABB aabb;
-    const auto& d = m_pool.get(id);
-    if (d.shape) {
-        aabb = d.shape->computeAABB(d.transform);
-    } else {
-        aabb = AABB{ d.transform.position, d.transform.position };
-    }
+    AABB aabb = computeBodyAABB(m_pool.get(id));
 
     bool isStatic = (desc.type == BodyType::Static);
     m_broadPhase.insertBody(id, aabb, desc.layer, desc.mask, isStatic);
@@ -143,6 +181,7 @@ Body PhysicsWorld::createBody(const BodyDescriptor& desc) {
 }
 
 void PhysicsWorld::destroyBody(Body body) {
+    if (!body.isValid()) return;
     m_broadPhase.removeBody(body.id());
     m_pool.destroyBody(body.id());
 }
@@ -301,63 +340,106 @@ void PhysicsWorld::substep(float dt) {
     {
         CAMPELLO_PROFILE_SCOPE(m_profiler, "NarrowPhase");
         m_narrowPhase.clearManifolds();
-        m_narrowPhase.process(
-            m_broadPhase.currentPairs(),
-            [this](uint32_t id) { return m_pool.getShapeInstance(id); },
-            m_workerThreads);
+        if (m_workerThreads > 1) {
+            m_narrowPhase.process(
+                m_broadPhase.currentPairs(),
+                [this](uint32_t id) { return m_pool.getShapeInstance(id); },
+                m_workerThreads,
+                [this](int total, const std::function<void(int first, int last)>& fn) {
+                    m_threadPool->parallelFor(total, fn);
+                });
+        } else {
+            m_narrowPhase.process(
+                m_broadPhase.currentPairs(),
+                [this](uint32_t id) { return m_pool.getShapeInstance(id); },
+                1);
+        }
     }
 
     {
         CAMPELLO_PROFILE_SCOPE(m_profiler, "BuildContacts");
         buildContacts(dt);
-        buildCcdContacts(dt);
+        if (m_pool.ccdEnabledCount() > 0)
+            buildCcdContacts(dt);
+        buildContactColors();
     }
-
     {
-        CAMPELLO_PROFILE_SCOPE(m_profiler, "Islands");
-        buildIslands();        // union-find grouping + wake propagation
-        warmStartContacts();   // warm start after bodies are woken
+        CAMPELLO_PROFILE_SCOPE(m_profiler, "BuildGlobalContactColors");
+        if (!m_contactPoints.empty())
+            buildGlobalContactColors();
     }
 
-    {
-        CAMPELLO_PROFILE_SCOPE(m_profiler, "Solver");
-        m_constraintSolver.iterations = constraintIterations;
-        solveIslands(dt);      // per-island constraint + contact solve
-    }
+    const bool hasContacts    = !m_contactPoints.empty();
+    const bool hasConstraints = !m_constraintSolver.constraints().empty();
 
-    // Persist accumulated impulses for next frame's warm start
-    for (const auto& p : m_contactPoints) {
-        if (p.wsiN)  *p.wsiN  = p.lambdaN;
-        if (p.wsiT0) *p.wsiT0 = p.lambdaT0;
-        if (p.wsiT1) *p.wsiT1 = p.lambdaT1;
+    if (hasContacts || hasConstraints) {
+        {
+            CAMPELLO_PROFILE_SCOPE(m_profiler, "Islands");
+            buildIslands();        // union-find grouping + wake propagation
+            warmStartContacts();   // warm start after bodies are woken
+        }
+
+        {
+            CAMPELLO_PROFILE_SCOPE(m_profiler, "Solver");
+            m_constraintSolver.iterations = constraintIterations;
+            solveIslands(dt);      // per-island constraint + contact solve
+        }
+
+        // Persist accumulated impulses for next frame's warm start
+        for (const auto& p : m_contactPoints) {
+            if (p.wsiN)  *p.wsiN  = p.lambdaN;
+            if (p.wsiT0) *p.wsiT0 = p.lambdaT0;
+            if (p.wsiT1) *p.wsiT1 = p.lambdaT1;
+        }
+
+        {
+            CAMPELLO_PROFILE_SCOPE(m_profiler, "PositionSolve");
+            solveIslandPositions(dt);
+        }
+
+        {
+            CAMPELLO_PROFILE_SCOPE(m_profiler, "IslandSleep");
+            updateIslandSleep();   // island-level simultaneous sleep decision
+        }
+    } else {
+        m_contactPoints.clear();
+        // Fallback per-body sleep for isolated bodies (no contacts / no constraints)
+        const int required = m_integratorSettings.sleepFramesRequired;
+        m_pool.forEach([&](uint32_t /*id*/, BodyData& d) {
+            if (d.type != BodyType::Dynamic || d.isSleeping) return;
+            if (d.sleepFrames >= required) {
+                d.isSleeping = true;
+                d.linearVelocity  = { 0.f, 0.f, 0.f };
+                d.angularVelocity = { 0.f, 0.f, 0.f };
+            }
+        });
     }
 
     {
         CAMPELLO_PROFILE_SCOPE(m_profiler, "Integrate");
-        integrate(m_pool, m_integratorSettings, dt);
-    }
-
-    {
-        CAMPELLO_PROFILE_SCOPE(m_profiler, "PositionSolve");
-        m_constraintSolver.positionIterations = positionIterations;
-        m_constraintSolver.positionAlpha      = positionCorrectionAlpha;
-        m_constraintSolver.solvePositions(m_pool, dt);
-        solveContactPositions(dt);
-    }
-
-    {
-        CAMPELLO_PROFILE_SCOPE(m_profiler, "IslandSleep");
-        updateIslandSleep();   // island-level simultaneous sleep decision
+        const auto& dynIds = m_pool.activeDynamicIds();
+        if (m_workerThreads > 1 && dynIds.size() >= 64) {
+            m_threadPool->parallelFor(static_cast<int>(dynIds.size()), [&](int first, int last) {
+                integrateSlice(m_pool, m_integratorSettings, dt,
+                               dynIds.data() + first, last - first);
+            });
+        } else {
+            integrate(m_pool, m_integratorSettings, dt);
+        }
     }
 
     for (auto* l : m_stepListeners) l->onPostStep(dt);
 
-    dispatchContactEvents();
-    dispatchTriggerEvents(addedPairs, removedPairs);
+    if (!m_contactListeners.empty() || !m_prevContactKeys.empty())
+        dispatchContactEvents();
+    if (!m_triggerListeners.empty())
+        dispatchTriggerEvents(addedPairs, removedPairs);
 }
 
 void PhysicsWorld::updateBroadPhase() {
-    // Collect IDs of moving bodies
+    // Collect IDs of moving bodies and compute AABBs in one pass for the serial path.
+    // Parallel path still needs the entries buffer because AABB compute and BVH update
+    // cannot overlap (BVH is not thread-safe).
     struct Entry { uint32_t id; AABB aabb; };
     std::vector<Entry> entries;
     entries.reserve(m_pool.activeCount());
@@ -366,38 +448,25 @@ void PhysicsWorld::updateBroadPhase() {
         entries.push_back({id, {}});
     });
 
-    // Compute AABBs — parallel when multiple worker threads are configured.
-    // The BVH update itself (updateBody) is not thread-safe and remains serial.
     const int n = static_cast<int>(entries.size());
     if (m_workerThreads > 1 && n >= 32) {
         auto computeRange = [&](int first, int last) {
             for (int i = first; i < last; ++i) {
                 const auto& d = m_pool.get(entries[static_cast<size_t>(i)].id);
-                entries[static_cast<size_t>(i)].aabb = d.shape
-                    ? d.shape->computeAABB(d.transform)
-                    : AABB{ d.transform.position, d.transform.position };
+                entries[static_cast<size_t>(i)].aabb = computeBodyAABB(d);
             }
         };
-        const int threads = std::min(m_workerThreads, n);
-        const int chunk   = (n + threads - 1) / threads;
-        std::vector<std::thread> workers;
-        workers.reserve(static_cast<size_t>(threads - 1));
-        for (int t = 0; t < threads - 1; ++t)
-            workers.emplace_back(computeRange, t * chunk, std::min((t + 1) * chunk, n));
-        computeRange((threads - 1) * chunk, n);
-        for (auto& th : workers) th.join();
+        m_threadPool->parallelFor(n, computeRange);
+        // Apply BVH updates serially
+        for (const auto& e : entries)
+            m_broadPhase.updateBody(e.id, e.aabb);
     } else {
+        // Serial path: fuse AABB compute + BVH update to avoid second pass
         for (auto& e : entries) {
             const auto& d = m_pool.get(e.id);
-            e.aabb = d.shape
-                ? d.shape->computeAABB(d.transform)
-                : AABB{ d.transform.position, d.transform.position };
+            m_broadPhase.updateBody(e.id, computeBodyAABB(d));
         }
     }
-
-    // Apply BVH updates serially (BVH is not thread-safe)
-    for (const auto& e : entries)
-        m_broadPhase.updateBody(e.id, e.aabb);
 
     m_broadPhase.computePairs();
 }
@@ -426,6 +495,7 @@ void PhysicsWorld::buildContacts(float dt) {
             p.bodyA = manifold.bodyA;
             p.bodyB = manifold.bodyB;
             p.friction = friction;
+            p.depth    = cp.depth;
 
             // Arms from body centers to contact point
             p.rA = cp.position - da.transform.position;
@@ -497,39 +567,87 @@ void PhysicsWorld::solveContactPositions(float /*dt*/) {
     if (positionIterations <= 0) return;
     const float alpha = positionCorrectionAlpha;
 
-    for (const auto& manifold : m_narrowPhase.manifolds()) {
-        auto& da = m_pool.get(manifold.bodyA);
-        auto& db = m_pool.get(manifold.bodyB);
-        if (da.type == BodyType::Sensor || db.type == BodyType::Sensor) continue;
+    for (auto& p : m_contactPoints) {
+        auto& da = m_pool.get(p.bodyA);
+        auto& db = m_pool.get(p.bodyB);
         if (da.isSleeping && db.isSleeping) continue;
 
-        for (int i = 0; i < manifold.count; ++i) {
-            const auto& cp = manifold.points[i];
-            // Only correct penetrations that Baumgarte alone is too slow to fix.
-            // Using 4× slop ensures we don't fight the velocity-level correction.
-            const float depth = cp.depth - 4.f * contactSlop;
-            if (depth <= 0.f) continue;
+        const float depth = p.depth - 4.f * contactSlop;
+        if (depth <= 0.f) continue;
 
-            const auto& n  = cp.normal;
-            const auto  rA = cp.position - da.transform.position;
-            const auto  rB = cp.position - db.transform.position;
+        const auto& n  = p.J_va_n;
+        const auto& rA = p.rA;
+        const auto& rB = p.rB;
 
-            const auto  Jva = n;
-            const auto  Jwa = cross3(rA, n);
-            const auto  Jvb = vm::Vector3<float>(-n.x(), -n.y(), -n.z());
-            const auto  Jwb = vm::Vector3<float>(-cross3(rB, n).x(),
-                                                 -cross3(rB, n).y(),
-                                                 -cross3(rB, n).z());
+        const auto  Jva = n;
+        const auto  Jwa = cross3(rA, n);
+        const auto  Jvb = vm::Vector3<float>(-n.x(), -n.y(), -n.z());
+        const auto  Jwb = vm::Vector3<float>(-cross3(rB, n).x(),
+                                             -cross3(rB, n).y(),
+                                             -cross3(rB, n).z());
 
-            const float effMass = computeEffMassRow(da, db, Jva, Jwa, Jvb, Jwb);
-            if (effMass == 0.f) continue;
+        const float effMass = computeEffMassRow(da, db, Jva, Jwa, Jvb, Jwb);
+        if (effMass == 0.f) continue;
 
-            // Positive lambda pushes A in +n direction (out of floor).
-            // Contact convention: depth > 0 → penetrating → push apart (+lambda).
-            const float lambda = effMass * alpha * depth;
-            applyPosImpulse(da, Jva, Jwa, lambda);
-            applyPosImpulse(db, Jvb, Jwb, lambda);
+        const float lambda = effMass * alpha * depth;
+        applyPosImpulse(da, Jva, Jwa, lambda);
+        applyPosImpulse(db, Jvb, Jwb, lambda);
+    }
+}
+
+void PhysicsWorld::solveIslandPositions(float dt) {
+    auto solveOne = [&](int first, int last) {
+        for (int i = first; i < last; ++i) {
+            const auto& island = m_islands[static_cast<size_t>(i)];
+            bool allSleeping = true;
+            for (uint32_t id : island.bodyIds)
+                if (!m_pool.get(id).isSleeping) { allSleeping = false; break; }
+            if (allSleeping) continue;
+
+            // Constraint position solve
+            for (int iter = 0; iter < positionIterations; ++iter)
+                for (auto* c : island.constraintPtrs)
+                    c->solvePosition(m_pool, dt, positionCorrectionAlpha);
+
+            // Contact position solve (island-local)
+            const float alpha = positionCorrectionAlpha;
+            for (int iter = 0; iter < positionIterations; ++iter) {
+                for (int ci : island.contactIndices) {
+                    auto& p = m_contactPoints[ci];
+                    auto& da = m_pool.get(p.bodyA);
+                    auto& db = m_pool.get(p.bodyB);
+                    if (da.isSleeping && db.isSleeping) continue;
+
+                    const float depth = p.depth - 4.f * contactSlop;
+                    if (depth <= 0.f) continue;
+
+                    const auto& n  = p.J_va_n;
+                    const auto& rA = p.rA;
+                    const auto& rB = p.rB;
+
+                    const auto  Jva = n;
+                    const auto  Jwa = cross3(rA, n);
+                    const auto  Jvb = vm::Vector3<float>(-n.x(), -n.y(), -n.z());
+                    const auto  Jwb = vm::Vector3<float>(-cross3(rB, n).x(),
+                                                         -cross3(rB, n).y(),
+                                                         -cross3(rB, n).z());
+
+                    const float effMass = computeEffMassRow(da, db, Jva, Jwa, Jvb, Jwb);
+                    if (effMass == 0.f) continue;
+
+                    const float lambda = effMass * alpha * depth;
+                    applyPosImpulse(da, Jva, Jwa, lambda);
+                    applyPosImpulse(db, Jvb, Jwb, lambda);
+                }
+            }
         }
+    };
+
+    const int islandCount = static_cast<int>(m_islands.size());
+    if (m_workerThreads > 1 && islandCount >= 2) {
+        m_threadPool->parallelFor(islandCount, solveOne);
+    } else {
+        solveOne(0, islandCount);
     }
 }
 
@@ -585,6 +703,375 @@ void PhysicsWorld::solveContactPoint(ContactSolverPoint& p) {
         p.lambdaT1 = std::clamp(p.lambdaT1 + dL, -limit, limit);
         dL = p.lambdaT1 - lOld;
         applyImpulseRow(da, db, p.J_va_t1, p.J_wa_t1, p.J_vb_t1, p.J_wb_t1, dL);
+    }
+}
+
+// ── SoA SIMD batch contact solver ─────────────────────────────────────────────
+
+namespace {
+
+#if defined(__SSE__) || defined(__AVX__)
+inline __m128 mm_dot3_4wide(const float* ax, const float* ay, const float* az,
+                            const float* bx, const float* by, const float* bz) {
+#if defined(__FMA__)
+    __m128 mx = _mm_mul_ps(_mm_loadu_ps(ax), _mm_loadu_ps(bx));
+    __m128 my = _mm_fmadd_ps(_mm_loadu_ps(ay), _mm_loadu_ps(by), mx);
+    return _mm_fmadd_ps(_mm_loadu_ps(az), _mm_loadu_ps(bz), my);
+#else
+    __m128 mx = _mm_mul_ps(_mm_loadu_ps(ax), _mm_loadu_ps(bx));
+    __m128 my = _mm_mul_ps(_mm_loadu_ps(ay), _mm_loadu_ps(by));
+    __m128 mz = _mm_mul_ps(_mm_loadu_ps(az), _mm_loadu_ps(bz));
+    return _mm_add_ps(_mm_add_ps(mx, my), mz);
+#endif
+}
+
+// Solve 4 contacts simultaneously using SSE for dot products & clamping.
+// Body velocity updates remain scalar (applyImpulseRow handles invMass/static).
+[[maybe_unused]] __attribute__((always_inline)) inline void solveContactBatch4Sse(
+        campello::physics::PhysicsWorld::ContactSolverSoA& soa,
+        campello::physics::BodyPool& pool, int i) {
+    using namespace campello::physics;
+
+    uint32_t idA[4] = { soa.bodyA[i], soa.bodyA[i+1], soa.bodyA[i+2], soa.bodyA[i+3] };
+    uint32_t idB[4] = { soa.bodyB[i], soa.bodyB[i+1], soa.bodyB[i+2], soa.bodyB[i+3] };
+    BodyData* da[4] = { &pool.get(idA[0]), &pool.get(idA[1]), &pool.get(idA[2]), &pool.get(idA[3]) };
+    BodyData* db[4] = { &pool.get(idB[0]), &pool.get(idB[1]), &pool.get(idB[2]), &pool.get(idB[3]) };
+
+    auto gatherVel = [&](float* vax, float* vay, float* vaz,
+                         float* wax, float* way, float* waz,
+                         float* vbx, float* vby, float* vbz,
+                         float* wbx, float* wby, float* wbz) {
+        for (int k = 0; k < 4; ++k) {
+            vax[k] = da[k]->linearVelocity.x();  vay[k] = da[k]->linearVelocity.y();  vaz[k] = da[k]->linearVelocity.z();
+            wax[k] = da[k]->angularVelocity.x(); way[k] = da[k]->angularVelocity.y(); waz[k] = da[k]->angularVelocity.z();
+            vbx[k] = db[k]->linearVelocity.x();  vby[k] = db[k]->linearVelocity.y();  vbz[k] = db[k]->linearVelocity.z();
+            wbx[k] = db[k]->angularVelocity.x(); wby[k] = db[k]->angularVelocity.y(); wbz[k] = db[k]->angularVelocity.z();
+        }
+    };
+
+    alignas(16) float vax[4], vay[4], vaz[4];
+    alignas(16) float wax[4], way[4], waz[4];
+    alignas(16) float vbx[4], vby[4], vbz[4];
+    alignas(16) float wbx[4], wby[4], wbz[4];
+    alignas(16) float dLArr[4];
+    alignas(16) float lambdaArr[4];
+
+    // ---- Normal ----
+    gatherVel(vax, vay, vaz, wax, way, waz, vbx, vby, vbz, wbx, wby, wbz);
+
+    __m128 jv = _mm_add_ps(
+        _mm_add_ps(mm_dot3_4wide(vax, vay, vaz, &soa.J_va_nx[i], &soa.J_va_ny[i], &soa.J_va_nz[i]),
+                   mm_dot3_4wide(wax, way, waz, &soa.J_wa_nx[i], &soa.J_wa_ny[i], &soa.J_wa_nz[i])),
+        _mm_add_ps(mm_dot3_4wide(vbx, vby, vbz, &soa.J_vb_nx[i], &soa.J_vb_ny[i], &soa.J_vb_nz[i]),
+                   mm_dot3_4wide(wbx, wby, wbz, &soa.J_wb_nx[i], &soa.J_wb_ny[i], &soa.J_wb_nz[i]))
+    );
+
+    __m128 effMass = _mm_loadu_ps(&soa.effMassN[i]);
+    __m128 bias    = _mm_loadu_ps(&soa.biasN[i]);
+    __m128 lambdaOld = _mm_loadu_ps(&soa.lambdaN[i]);
+
+    __m128 dL = _mm_fnmadd_ps(effMass, _mm_add_ps(jv, bias), _mm_setzero_ps());
+    __m128 lambdaNew = _mm_max_ps(_mm_setzero_ps(), _mm_add_ps(lambdaOld, dL));
+    dL = _mm_sub_ps(lambdaNew, lambdaOld);
+
+    _mm_storeu_ps(dLArr, dL);
+    _mm_storeu_ps(lambdaArr, lambdaNew);
+
+    for (int k = 0; k < 4; ++k) {
+        soa.lambdaN[i + k] = lambdaArr[k];
+        applyImpulseRow(*da[k], *db[k],
+            vm::Vector3<float>(soa.J_va_nx[i+k], soa.J_va_ny[i+k], soa.J_va_nz[i+k]),
+            vm::Vector3<float>(soa.J_wa_nx[i+k], soa.J_wa_ny[i+k], soa.J_wa_nz[i+k]),
+            vm::Vector3<float>(soa.J_vb_nx[i+k], soa.J_vb_ny[i+k], soa.J_vb_nz[i+k]),
+            vm::Vector3<float>(soa.J_wb_nx[i+k], soa.J_wb_ny[i+k], soa.J_wb_nz[i+k]),
+            dLArr[k]);
+    }
+
+    // ---- Tangent 0 ----
+    gatherVel(vax, vay, vaz, wax, way, waz, vbx, vby, vbz, wbx, wby, wbz);
+
+    __m128 limit = _mm_mul_ps(
+        _mm_loadu_ps(&soa.friction[i]),
+        _mm_loadu_ps(&soa.lambdaN[i]));
+
+    jv = _mm_add_ps(
+        _mm_add_ps(mm_dot3_4wide(vax, vay, vaz, &soa.J_va_t0x[i], &soa.J_va_t0y[i], &soa.J_va_t0z[i]),
+                   mm_dot3_4wide(wax, way, waz, &soa.J_wa_t0x[i], &soa.J_wa_t0y[i], &soa.J_wa_t0z[i])),
+        _mm_add_ps(mm_dot3_4wide(vbx, vby, vbz, &soa.J_vb_t0x[i], &soa.J_vb_t0y[i], &soa.J_vb_t0z[i]),
+                   mm_dot3_4wide(wbx, wby, wbz, &soa.J_wb_t0x[i], &soa.J_wb_t0y[i], &soa.J_wb_t0z[i]))
+    );
+
+    effMass = _mm_loadu_ps(&soa.effMassT0[i]);
+    lambdaOld = _mm_loadu_ps(&soa.lambdaT0[i]);
+
+    dL = _mm_fnmadd_ps(effMass, jv, _mm_setzero_ps());
+    lambdaNew = _mm_min_ps(limit, _mm_max_ps(_mm_sub_ps(_mm_setzero_ps(), limit), _mm_add_ps(lambdaOld, dL)));
+    dL = _mm_sub_ps(lambdaNew, lambdaOld);
+
+    _mm_storeu_ps(dLArr, dL);
+    _mm_storeu_ps(lambdaArr, lambdaNew);
+
+    for (int k = 0; k < 4; ++k) {
+        soa.lambdaT0[i + k] = lambdaArr[k];
+        applyImpulseRow(*da[k], *db[k],
+            vm::Vector3<float>(soa.J_va_t0x[i+k], soa.J_va_t0y[i+k], soa.J_va_t0z[i+k]),
+            vm::Vector3<float>(soa.J_wa_t0x[i+k], soa.J_wa_t0y[i+k], soa.J_wa_t0z[i+k]),
+            vm::Vector3<float>(soa.J_vb_t0x[i+k], soa.J_vb_t0y[i+k], soa.J_vb_t0z[i+k]),
+            vm::Vector3<float>(soa.J_wb_t0x[i+k], soa.J_wb_t0y[i+k], soa.J_wb_t0z[i+k]),
+            dLArr[k]);
+    }
+
+    // ---- Tangent 1 ----
+    gatherVel(vax, vay, vaz, wax, way, waz, vbx, vby, vbz, wbx, wby, wbz);
+
+    limit = _mm_mul_ps(
+        _mm_loadu_ps(&soa.friction[i]),
+        _mm_loadu_ps(&soa.lambdaN[i]));
+
+    jv = _mm_add_ps(
+        _mm_add_ps(mm_dot3_4wide(vax, vay, vaz, &soa.J_va_t1x[i], &soa.J_va_t1y[i], &soa.J_va_t1z[i]),
+                   mm_dot3_4wide(wax, way, waz, &soa.J_wa_t1x[i], &soa.J_wa_t1y[i], &soa.J_wa_t1z[i])),
+        _mm_add_ps(mm_dot3_4wide(vbx, vby, vbz, &soa.J_vb_t1x[i], &soa.J_vb_t1y[i], &soa.J_vb_t1z[i]),
+                   mm_dot3_4wide(wbx, wby, wbz, &soa.J_wb_t1x[i], &soa.J_wb_t1y[i], &soa.J_wb_t1z[i]))
+    );
+
+    effMass = _mm_loadu_ps(&soa.effMassT1[i]);
+    lambdaOld = _mm_loadu_ps(&soa.lambdaT1[i]);
+
+    dL = _mm_fnmadd_ps(effMass, jv, _mm_setzero_ps());
+    lambdaNew = _mm_min_ps(limit, _mm_max_ps(_mm_sub_ps(_mm_setzero_ps(), limit), _mm_add_ps(lambdaOld, dL)));
+    dL = _mm_sub_ps(lambdaNew, lambdaOld);
+
+    _mm_storeu_ps(dLArr, dL);
+    _mm_storeu_ps(lambdaArr, lambdaNew);
+
+    for (int k = 0; k < 4; ++k) {
+        soa.lambdaT1[i + k] = lambdaArr[k];
+        applyImpulseRow(*da[k], *db[k],
+            vm::Vector3<float>(soa.J_va_t1x[i+k], soa.J_va_t1y[i+k], soa.J_va_t1z[i+k]),
+            vm::Vector3<float>(soa.J_wa_t1x[i+k], soa.J_wa_t1y[i+k], soa.J_wa_t1z[i+k]),
+            vm::Vector3<float>(soa.J_vb_t1x[i+k], soa.J_vb_t1y[i+k], soa.J_vb_t1z[i+k]),
+            vm::Vector3<float>(soa.J_wb_t1x[i+k], soa.J_wb_t1y[i+k], soa.J_wb_t1z[i+k]),
+            dLArr[k]);
+    }
+}
+
+// Solve 4 constraint rows simultaneously using SSE.
+[[maybe_unused]] __attribute__((always_inline)) inline void solveConstraintBatch4Sse(
+        campello::physics::PhysicsWorld::ConstraintRowSoA& soa,
+        campello::physics::BodyPool& pool, int i) {
+    using namespace campello::physics;
+
+    uint32_t idA[4] = { soa.bodyA[i], soa.bodyA[i+1], soa.bodyA[i+2], soa.bodyA[i+3] };
+    uint32_t idB[4] = { soa.bodyB[i], soa.bodyB[i+1], soa.bodyB[i+2], soa.bodyB[i+3] };
+    BodyData* da[4] = { &pool.get(idA[0]), &pool.get(idA[1]), &pool.get(idA[2]), &pool.get(idA[3]) };
+    BodyData* db[4] = { &pool.get(idB[0]), &pool.get(idB[1]), &pool.get(idB[2]), &pool.get(idB[3]) };
+
+    alignas(16) float vax[4], vay[4], vaz[4];
+    alignas(16) float wax[4], way[4], waz[4];
+    alignas(16) float vbx[4], vby[4], vbz[4];
+    alignas(16) float wbx[4], wby[4], wbz[4];
+    alignas(16) float dLArr[4];
+
+    for (int k = 0; k < 4; ++k) {
+        vax[k] = da[k]->linearVelocity.x();  vay[k] = da[k]->linearVelocity.y();  vaz[k] = da[k]->linearVelocity.z();
+        wax[k] = da[k]->angularVelocity.x(); way[k] = da[k]->angularVelocity.y(); waz[k] = da[k]->angularVelocity.z();
+        vbx[k] = db[k]->linearVelocity.x();  vby[k] = db[k]->linearVelocity.y();  vbz[k] = db[k]->linearVelocity.z();
+        wbx[k] = db[k]->angularVelocity.x(); wby[k] = db[k]->angularVelocity.y(); wbz[k] = db[k]->angularVelocity.z();
+    }
+
+    __m128 jv = _mm_add_ps(
+        _mm_add_ps(mm_dot3_4wide(vax, vay, vaz, &soa.J_va_x[i], &soa.J_va_y[i], &soa.J_va_z[i]),
+                   mm_dot3_4wide(wax, way, waz, &soa.J_wa_x[i], &soa.J_wa_y[i], &soa.J_wa_z[i])),
+        _mm_add_ps(mm_dot3_4wide(vbx, vby, vbz, &soa.J_vb_x[i], &soa.J_vb_y[i], &soa.J_vb_z[i]),
+                   mm_dot3_4wide(wbx, wby, wbz, &soa.J_wb_x[i], &soa.J_wb_y[i], &soa.J_wb_z[i]))
+    );
+
+    __m128 effMass   = _mm_loadu_ps(&soa.effMass[i]);
+    __m128 bias      = _mm_loadu_ps(&soa.bias[i]);
+    __m128 lambdaOld = _mm_loadu_ps(&soa.lambda[i]);
+    __m128 lambdaMin = _mm_loadu_ps(&soa.lambdaMin[i]);
+    __m128 lambdaMax = _mm_loadu_ps(&soa.lambdaMax[i]);
+
+    __m128 dL = _mm_fnmadd_ps(effMass, _mm_add_ps(jv, bias), _mm_setzero_ps());
+    __m128 lambdaNew = _mm_min_ps(lambdaMax, _mm_max_ps(lambdaMin, _mm_add_ps(lambdaOld, dL)));
+    dL = _mm_sub_ps(lambdaNew, lambdaOld);
+
+    _mm_storeu_ps(dLArr, dL);
+    _mm_storeu_ps(&soa.lambda[i], lambdaNew);
+
+    for (int k = 0; k < 4; ++k) {
+        applyImpulseRow(*da[k], *db[k],
+            vm::Vector3<float>(soa.J_va_x[i+k], soa.J_va_y[i+k], soa.J_va_z[i+k]),
+            vm::Vector3<float>(soa.J_wa_x[i+k], soa.J_wa_y[i+k], soa.J_wa_z[i+k]),
+            vm::Vector3<float>(soa.J_vb_x[i+k], soa.J_vb_y[i+k], soa.J_vb_z[i+k]),
+            vm::Vector3<float>(soa.J_wb_x[i+k], soa.J_wb_y[i+k], soa.J_wb_z[i+k]),
+            dLArr[k]);
+    }
+}
+
+#endif // __SSE__ || __AVX__
+
+} // namespace
+
+static void solveConstraintSoAScalar(
+        campello::physics::PhysicsWorld::ConstraintRowSoA& soa,
+        campello::physics::BodyPool& pool, int i) {
+    using namespace campello::physics;
+    auto& da = pool.get(soa.bodyA[i]);
+    auto& db = pool.get(soa.bodyB[i]);
+
+    float Jv = soa.J_va_x[i] * da.linearVelocity.x() + soa.J_va_y[i] * da.linearVelocity.y() + soa.J_va_z[i] * da.linearVelocity.z()
+             + soa.J_wa_x[i] * da.angularVelocity.x() + soa.J_wa_y[i] * da.angularVelocity.y() + soa.J_wa_z[i] * da.angularVelocity.z()
+             + soa.J_vb_x[i] * db.linearVelocity.x() + soa.J_vb_y[i] * db.linearVelocity.y() + soa.J_vb_z[i] * db.linearVelocity.z()
+             + soa.J_wb_x[i] * db.angularVelocity.x() + soa.J_wb_y[i] * db.angularVelocity.y() + soa.J_wb_z[i] * db.angularVelocity.z();
+
+    float dL  = soa.effMass[i] * -(Jv + soa.bias[i]);
+    float lOld = soa.lambda[i];
+    soa.lambda[i] = std::clamp(soa.lambda[i] + dL, soa.lambdaMin[i], soa.lambdaMax[i]);
+    dL = soa.lambda[i] - lOld;
+
+    applyImpulseRow(da, db,
+        vm::Vector3<float>(soa.J_va_x[i], soa.J_va_y[i], soa.J_va_z[i]),
+        vm::Vector3<float>(soa.J_wa_x[i], soa.J_wa_y[i], soa.J_wa_z[i]),
+        vm::Vector3<float>(soa.J_vb_x[i], soa.J_vb_y[i], soa.J_vb_z[i]),
+        vm::Vector3<float>(soa.J_wb_x[i], soa.J_wb_y[i], soa.J_wb_z[i]),
+        dL);
+}
+
+void PhysicsWorld::buildContactSoA() {
+    const size_t n = m_contactPoints.size();
+    if (n == 0) {
+        m_contactSoA.clear();
+        m_contactSoA.colorOffsets.clear();
+        m_contactSoA.colorCounts.clear();
+        return;
+    }
+    m_contactSoA.resize(n);
+    m_contactSoA.colorOffsets.clear();
+    m_contactSoA.colorCounts.clear();
+    size_t soaIdx = 0;
+    for (const auto& color : m_globalContactColors) {
+        m_contactSoA.colorOffsets.push_back(static_cast<int>(soaIdx));
+        m_contactSoA.colorCounts.push_back(static_cast<int>(color.size()));
+        for (int cpIdx : color) {
+            const auto& p = m_contactPoints[cpIdx];
+            m_contactSoA.contactIndex[soaIdx] = cpIdx;
+            m_contactSoA.bodyA[soaIdx] = p.bodyA;
+            m_contactSoA.bodyB[soaIdx] = p.bodyB;
+            m_contactSoA.J_va_nx[soaIdx] = p.J_va_n.x(); m_contactSoA.J_va_ny[soaIdx] = p.J_va_n.y(); m_contactSoA.J_va_nz[soaIdx] = p.J_va_n.z();
+            m_contactSoA.J_wa_nx[soaIdx] = p.J_wa_n.x(); m_contactSoA.J_wa_ny[soaIdx] = p.J_wa_n.y(); m_contactSoA.J_wa_nz[soaIdx] = p.J_wa_n.z();
+            m_contactSoA.J_vb_nx[soaIdx] = p.J_vb_n.x(); m_contactSoA.J_vb_ny[soaIdx] = p.J_vb_n.y(); m_contactSoA.J_vb_nz[soaIdx] = p.J_vb_n.z();
+            m_contactSoA.J_wb_nx[soaIdx] = p.J_wb_n.x(); m_contactSoA.J_wb_ny[soaIdx] = p.J_wb_n.y(); m_contactSoA.J_wb_nz[soaIdx] = p.J_wb_n.z();
+            m_contactSoA.J_va_t0x[soaIdx] = p.J_va_t0.x(); m_contactSoA.J_va_t0y[soaIdx] = p.J_va_t0.y(); m_contactSoA.J_va_t0z[soaIdx] = p.J_va_t0.z();
+            m_contactSoA.J_wa_t0x[soaIdx] = p.J_wa_t0.x(); m_contactSoA.J_wa_t0y[soaIdx] = p.J_wa_t0.y(); m_contactSoA.J_wa_t0z[soaIdx] = p.J_wa_t0.z();
+            m_contactSoA.J_vb_t0x[soaIdx] = p.J_vb_t0.x(); m_contactSoA.J_vb_t0y[soaIdx] = p.J_vb_t0.y(); m_contactSoA.J_vb_t0z[soaIdx] = p.J_vb_t0.z();
+            m_contactSoA.J_wb_t0x[soaIdx] = p.J_wb_t0.x(); m_contactSoA.J_wb_t0y[soaIdx] = p.J_wb_t0.y(); m_contactSoA.J_wb_t0z[soaIdx] = p.J_wb_t0.z();
+            m_contactSoA.J_va_t1x[soaIdx] = p.J_va_t1.x(); m_contactSoA.J_va_t1y[soaIdx] = p.J_va_t1.y(); m_contactSoA.J_va_t1z[soaIdx] = p.J_va_t1.z();
+            m_contactSoA.J_wa_t1x[soaIdx] = p.J_wa_t1.x(); m_contactSoA.J_wa_t1y[soaIdx] = p.J_wa_t1.y(); m_contactSoA.J_wa_t1z[soaIdx] = p.J_wa_t1.z();
+            m_contactSoA.J_vb_t1x[soaIdx] = p.J_vb_t1.x(); m_contactSoA.J_vb_t1y[soaIdx] = p.J_vb_t1.y(); m_contactSoA.J_vb_t1z[soaIdx] = p.J_vb_t1.z();
+            m_contactSoA.J_wb_t1x[soaIdx] = p.J_wb_t1.x(); m_contactSoA.J_wb_t1y[soaIdx] = p.J_wb_t1.y(); m_contactSoA.J_wb_t1z[soaIdx] = p.J_wb_t1.z();
+            m_contactSoA.effMassN[soaIdx]  = p.effMassN;
+            m_contactSoA.effMassT0[soaIdx] = p.effMassT0;
+            m_contactSoA.effMassT1[soaIdx] = p.effMassT1;
+            m_contactSoA.biasN[soaIdx]     = p.biasN;
+            m_contactSoA.friction[soaIdx]  = p.friction;
+            m_contactSoA.lambdaN[soaIdx]   = p.lambdaN;
+            m_contactSoA.lambdaT0[soaIdx]  = p.lambdaT0;
+            m_contactSoA.lambdaT1[soaIdx]  = p.lambdaT1;
+            ++soaIdx;
+        }
+    }
+}
+
+// Scalar fallback that operates directly on SoA data (avoids AoS↔SoA mismatch)
+static void solveContactSoAScalar(
+        campello::physics::PhysicsWorld::ContactSolverSoA& soa,
+        campello::physics::BodyPool& pool, int i) {
+    using namespace campello::physics;
+    auto& da = pool.get(soa.bodyA[i]);
+    auto& db = pool.get(soa.bodyB[i]);
+
+    // Normal row
+    {
+        float Jv = soa.J_va_nx[i] * da.linearVelocity.x() + soa.J_va_ny[i] * da.linearVelocity.y() + soa.J_va_nz[i] * da.linearVelocity.z()
+                 + soa.J_wa_nx[i] * da.angularVelocity.x() + soa.J_wa_ny[i] * da.angularVelocity.y() + soa.J_wa_nz[i] * da.angularVelocity.z()
+                 + soa.J_vb_nx[i] * db.linearVelocity.x() + soa.J_vb_ny[i] * db.linearVelocity.y() + soa.J_vb_nz[i] * db.linearVelocity.z()
+                 + soa.J_wb_nx[i] * db.angularVelocity.x() + soa.J_wb_ny[i] * db.angularVelocity.y() + soa.J_wb_nz[i] * db.angularVelocity.z();
+        float dL  = soa.effMassN[i] * -(Jv + soa.biasN[i]);
+        float lOld = soa.lambdaN[i];
+        soa.lambdaN[i] = std::max(0.f, soa.lambdaN[i] + dL);
+        dL = soa.lambdaN[i] - lOld;
+        applyImpulseRow(da, db,
+            vm::Vector3<float>(soa.J_va_nx[i], soa.J_va_ny[i], soa.J_va_nz[i]),
+            vm::Vector3<float>(soa.J_wa_nx[i], soa.J_wa_ny[i], soa.J_wa_nz[i]),
+            vm::Vector3<float>(soa.J_vb_nx[i], soa.J_vb_ny[i], soa.J_vb_nz[i]),
+            vm::Vector3<float>(soa.J_wb_nx[i], soa.J_wb_ny[i], soa.J_wb_nz[i]),
+            dL);
+    }
+
+    float limit = soa.friction[i] * soa.lambdaN[i];
+    {
+        float Jv = soa.J_va_t0x[i] * da.linearVelocity.x() + soa.J_va_t0y[i] * da.linearVelocity.y() + soa.J_va_t0z[i] * da.linearVelocity.z()
+                 + soa.J_wa_t0x[i] * da.angularVelocity.x() + soa.J_wa_t0y[i] * da.angularVelocity.y() + soa.J_wa_t0z[i] * da.angularVelocity.z()
+                 + soa.J_vb_t0x[i] * db.linearVelocity.x() + soa.J_vb_t0y[i] * db.linearVelocity.y() + soa.J_vb_t0z[i] * db.linearVelocity.z()
+                 + soa.J_wb_t0x[i] * db.angularVelocity.x() + soa.J_wb_t0y[i] * db.angularVelocity.y() + soa.J_wb_t0z[i] * db.angularVelocity.z();
+        float dL  = soa.effMassT0[i] * -Jv;
+        float lOld = soa.lambdaT0[i];
+        soa.lambdaT0[i] = std::clamp(soa.lambdaT0[i] + dL, -limit, limit);
+        dL = soa.lambdaT0[i] - lOld;
+        applyImpulseRow(da, db,
+            vm::Vector3<float>(soa.J_va_t0x[i], soa.J_va_t0y[i], soa.J_va_t0z[i]),
+            vm::Vector3<float>(soa.J_wa_t0x[i], soa.J_wa_t0y[i], soa.J_wa_t0z[i]),
+            vm::Vector3<float>(soa.J_vb_t0x[i], soa.J_vb_t0y[i], soa.J_vb_t0z[i]),
+            vm::Vector3<float>(soa.J_wb_t0x[i], soa.J_wb_t0y[i], soa.J_wb_t0z[i]),
+            dL);
+    }
+    {
+        float Jv = soa.J_va_t1x[i] * da.linearVelocity.x() + soa.J_va_t1y[i] * da.linearVelocity.y() + soa.J_va_t1z[i] * da.linearVelocity.z()
+                 + soa.J_wa_t1x[i] * da.angularVelocity.x() + soa.J_wa_t1y[i] * da.angularVelocity.y() + soa.J_wa_t1z[i] * da.angularVelocity.z()
+                 + soa.J_vb_t1x[i] * db.linearVelocity.x() + soa.J_vb_t1y[i] * db.linearVelocity.y() + soa.J_vb_t1z[i] * db.linearVelocity.z()
+                 + soa.J_wb_t1x[i] * db.angularVelocity.x() + soa.J_wb_t1y[i] * db.angularVelocity.y() + soa.J_wb_t1z[i] * db.angularVelocity.z();
+        float dL  = soa.effMassT1[i] * -Jv;
+        float lOld = soa.lambdaT1[i];
+        soa.lambdaT1[i] = std::clamp(soa.lambdaT1[i] + dL, -limit, limit);
+        dL = soa.lambdaT1[i] - lOld;
+        applyImpulseRow(da, db,
+            vm::Vector3<float>(soa.J_va_t1x[i], soa.J_va_t1y[i], soa.J_va_t1z[i]),
+            vm::Vector3<float>(soa.J_wa_t1x[i], soa.J_wa_t1y[i], soa.J_wa_t1z[i]),
+            vm::Vector3<float>(soa.J_vb_t1x[i], soa.J_vb_t1y[i], soa.J_vb_t1z[i]),
+            vm::Vector3<float>(soa.J_wb_t1x[i], soa.J_wb_t1y[i], soa.J_wb_t1z[i]),
+            dL);
+    }
+}
+
+void PhysicsWorld::solveContactSoA(float /*dt*/) {
+    const int n = static_cast<int>(m_contactPoints.size());
+    if (n == 0) return;
+
+    const int colorCount = static_cast<int>(m_contactSoA.colorCounts.size());
+    for (int iter = 0; iter < contactIterations; ++iter) {
+        for (int c = 0; c < colorCount; ++c) {
+            int offset = m_contactSoA.colorOffsets[c];
+            int count  = m_contactSoA.colorCounts[c];
+            int i = offset;
+#if defined(__SSE__) || defined(__AVX__)
+            for (; i + 4 <= offset + count; i += 4) {
+                solveContactBatch4Sse(m_contactSoA, m_pool, i);
+            }
+#endif
+            for (; i < offset + count; ++i) {
+                solveContactSoAScalar(m_contactSoA, m_pool, i);
+            }
+        }
+    }
+
+    // Copy lambdas back to m_contactPoints for warm-start persistence
+    for (size_t i = 0; i < m_contactPoints.size(); ++i) {
+        int cpIdx = m_contactSoA.contactIndex[i];
+        m_contactPoints[cpIdx].lambdaN  = m_contactSoA.lambdaN[i];
+        m_contactPoints[cpIdx].lambdaT0 = m_contactSoA.lambdaT0[i];
+        m_contactPoints[cpIdx].lambdaT1 = m_contactSoA.lambdaT1[i];
     }
 }
 
@@ -703,27 +1190,179 @@ void PhysicsWorld::buildIslands() {
 }
 
 void PhysicsWorld::solveIslands(float dt) {
-    for (const auto& island : m_islands) {
-        // Skip fully sleeping islands
-        bool allSleeping = true;
-        for (uint32_t id : island.bodyIds)
-            if (!m_pool.get(id).isSleeping) { allSleeping = false; break; }
-        if (allSleeping) continue;
+    const int constraintIterations = m_constraintSolver.iterations;
 
-        // Constraints: prepare → warm start → N×solve
-        for (auto* c : island.constraintPtrs)
-            c->prepare(m_pool, dt, m_constraintSolver.baumgarte, m_constraintSolver.slop);
-        for (auto* c : island.constraintPtrs)
-            c->warmStart(m_pool);
-        for (int iter = 0; iter < constraintIterations; ++iter)
-            for (auto* c : island.constraintPtrs)
-                c->solveVelocity(m_pool);
+    // ── Constraint solve (per-island, constraint-level color + row-batch SIMD) ───
+    auto solveConstraints = [&](int first, int last) {
+        // Thread-local temporary buffers (reused across islands)
+        ConstraintRowSoA soa;
+        std::vector<ConstraintRow*> rowPtrs;
+        std::vector<std::vector<int>> colorRowGroupEnds;
+        std::vector<Constraint*> awakeConstraints;
+        std::vector<std::vector<Constraint*>> constraintColors;
 
-        // Contacts: N×solve
-        for (int iter = 0; iter < contactIterations; ++iter)
-            for (int ci : island.contactIndices)
-                solveContactPoint(m_contactPoints[ci]);
+        for (int i = first; i < last; ++i) {
+            const auto& island = m_islands[static_cast<size_t>(i)];
+            // Skip fully sleeping islands
+            bool allSleeping = true;
+            for (uint32_t id : island.bodyIds)
+                if (!m_pool.get(id).isSleeping) { allSleeping = false; break; }
+            if (allSleeping) continue;
+
+            // Collect awake constraints for this island
+            awakeConstraints.clear();
+            awakeConstraints.reserve(island.constraintPtrs.size());
+            for (auto* c : island.constraintPtrs) {
+                bool aSleep = m_pool.get(c->bodyA().id()).isSleeping;
+                bool bSleep = m_pool.get(c->bodyB().id()).isSleeping;
+                if (!aSleep || !bSleep) awakeConstraints.push_back(c);
+            }
+
+            // Scalar prepare
+            for (auto* c : awakeConstraints)
+                c->prepare(m_pool, dt, m_constraintSolver.baumgarte, m_constraintSolver.slop);
+
+            if (awakeConstraints.empty()) continue;
+
+            // Greedy coloring on CONSTRAINTS (not rows).
+            // Two constraints conflict if they share a writable body.
+            for (auto& cc : constraintColors) cc.clear();
+            constraintColors.clear();
+            for (auto* c : awakeConstraints) {
+                uint32_t idA = c->bodyA().id();
+                uint32_t idB = c->bodyB().id();
+                bool aWritable = m_pool.get(idA).invMass != 0.f;
+                bool bWritable = m_pool.get(idB).invMass != 0.f;
+
+                int chosenColor = 0;
+                bool placed = false;
+                while (!placed) {
+                    if (chosenColor >= static_cast<int>(constraintColors.size()))
+                        constraintColors.emplace_back();
+                    bool conflict = false;
+                    for (auto* other : constraintColors[chosenColor]) {
+                        uint32_t oA = other->bodyA().id();
+                        uint32_t oB = other->bodyB().id();
+                        if (aWritable && (idA == oA || idA == oB)) { conflict = true; break; }
+                        if (bWritable && (idB == oA || idB == oB)) { conflict = true; break; }
+                    }
+                    if (!conflict) {
+                        constraintColors[chosenColor].push_back(c);
+                        placed = true;
+                    } else {
+                        ++chosenColor;
+                    }
+                }
+            }
+
+            // Count total rows and build SoA in row-index-major order per color.
+            // Within each color, all row-0s come first, then row-1s, etc.
+            // This lets us batch 4-wide SSE on rows from different constraints
+            // while preserving Gauss-Seidel convergence within each constraint.
+            int totalRows = 0;
+            for (auto& color : constraintColors) {
+                for (auto* c : color) totalRows += c->rowCount();
+            }
+
+            soa.resize(totalRows);
+            rowPtrs.resize(totalRows);
+            colorRowGroupEnds.resize(constraintColors.size());
+            soa.colorOffsets.clear();
+            soa.colorCounts.clear();
+            int soaIdx = 0;
+
+            for (int ci = 0; ci < static_cast<int>(constraintColors.size()); ++ci) {
+                auto& color = constraintColors[ci];
+                int maxRows = 0;
+                for (auto* c : color) maxRows = std::max(maxRows, c->rowCount());
+
+                soa.colorOffsets.push_back(soaIdx);
+                colorRowGroupEnds[ci].clear();
+
+                for (int rowIdx = 0; rowIdx < maxRows; ++rowIdx) {
+                    for (auto* c : color) {
+                        if (c->rowCount() <= rowIdx) continue;
+                        auto* rows = c->rows();
+                        const auto& row = rows[rowIdx];
+                        uint32_t idA = c->bodyA().id();
+                        uint32_t idB = c->bodyB().id();
+
+                        soa.bodyA[soaIdx]      = idA;
+                        soa.bodyB[soaIdx]      = idB;
+                        soa.J_va_x[soaIdx]     = row.J_va.x();
+                        soa.J_va_y[soaIdx]     = row.J_va.y();
+                        soa.J_va_z[soaIdx]     = row.J_va.z();
+                        soa.J_wa_x[soaIdx]     = row.J_wa.x();
+                        soa.J_wa_y[soaIdx]     = row.J_wa.y();
+                        soa.J_wa_z[soaIdx]     = row.J_wa.z();
+                        soa.J_vb_x[soaIdx]     = row.J_vb.x();
+                        soa.J_vb_y[soaIdx]     = row.J_vb.y();
+                        soa.J_vb_z[soaIdx]     = row.J_vb.z();
+                        soa.J_wb_x[soaIdx]     = row.J_wb.x();
+                        soa.J_wb_y[soaIdx]     = row.J_wb.y();
+                        soa.J_wb_z[soaIdx]     = row.J_wb.z();
+                        soa.effMass[soaIdx]    = row.effMass;
+                        soa.bias[soaIdx]       = row.bias;
+                        soa.lambdaMin[soaIdx]  = row.lambdaMin;
+                        soa.lambdaMax[soaIdx]  = row.lambdaMax;
+                        soa.lambda[soaIdx]     = row.lambda;
+                        rowPtrs[soaIdx] = &rows[rowIdx];
+                        ++soaIdx;
+                    }
+                    colorRowGroupEnds[ci].push_back(soaIdx);
+                }
+                soa.colorCounts.push_back(soaIdx - soa.colorOffsets.back());
+            }
+
+            // Scalar warm start (apply previous lambdas scaled by 0.85f)
+            for (int r = 0; r < totalRows; ++r) {
+                auto& da = m_pool.get(soa.bodyA[r]);
+                auto& db = m_pool.get(soa.bodyB[r]);
+                applyImpulseRow(da, db,
+                    vm::Vector3<float>(soa.J_va_x[r], soa.J_va_y[r], soa.J_va_z[r]),
+                    vm::Vector3<float>(soa.J_wa_x[r], soa.J_wa_y[r], soa.J_wa_z[r]),
+                    vm::Vector3<float>(soa.J_vb_x[r], soa.J_vb_y[r], soa.J_vb_z[r]),
+                    vm::Vector3<float>(soa.J_wb_x[r], soa.J_wb_y[r], soa.J_wb_z[r]),
+                    soa.lambda[r] * 0.85f);
+            }
+
+            // Solve iterations: row-group-major within each color, 4-wide SSE batches
+            for (int iter = 0; iter < constraintIterations; ++iter) {
+                for (int ci = 0; ci < static_cast<int>(constraintColors.size()); ++ci) {
+                    int colorOffset = soa.colorOffsets[ci];
+                    int prevEnd = colorOffset;
+                    for (int groupEnd : colorRowGroupEnds[ci]) {
+                        int j = prevEnd;
+#if defined(__SSE__) || defined(__AVX__)
+                        for (; j + 4 <= groupEnd; j += 4) {
+                            solveConstraintBatch4Sse(soa, m_pool, j);
+                        }
+#endif
+                        for (; j < groupEnd; ++j) {
+                            solveConstraintSoAScalar(soa, m_pool, j);
+                        }
+                        prevEnd = groupEnd;
+                    }
+                }
+            }
+
+            // Copy lambdas back to constraint rows for warm-start persistence
+            for (int r = 0; r < totalRows; ++r) {
+                rowPtrs[r]->lambda = soa.lambda[r];
+            }
+        }
+    };
+
+    const int islandCount = static_cast<int>(m_islands.size());
+    if (m_workerThreads > 1 && islandCount >= 2) {
+        m_threadPool->parallelFor(islandCount, solveConstraints);
+    } else {
+        solveConstraints(0, islandCount);
     }
+
+    // ── Contact solve (SoA SIMD batch) ──────────────────────────────────────────
+    buildContactSoA();
+    solveContactSoA(dt);
 }
 
 void PhysicsWorld::updateIslandSleep() {
@@ -796,6 +1435,55 @@ void PhysicsWorld::dispatchContactEvents() {
     std::swap(m_prevContactKeys, m_currContactKeys);
 }
 
+void PhysicsWorld::buildContactColors() {
+    const int n = static_cast<int>(m_contactPoints.size());
+    if (n == 0) return;
+
+    // Reset colors
+    for (auto& p : m_contactPoints) p.color = 0;
+
+    // Greedy graph coloring: two contacts conflict if they share a writable body.
+    // Static bodies (invMass == 0) are skipped because applyImpulseRow never writes to them.
+    std::vector<std::vector<int>> colors; // colors[c] = list of contact indices with color c
+
+    for (int i = 0; i < n; ++i) {
+        const auto& cp = m_contactPoints[i];
+        const bool aWritable = m_pool.get(cp.bodyA).invMass != 0.f;
+        const bool bWritable = m_pool.get(cp.bodyB).invMass != 0.f;
+
+        int chosenColor = 0;
+        bool placed = false;
+        while (!placed) {
+            if (chosenColor >= static_cast<int>(colors.size())) {
+                colors.emplace_back();
+            }
+            bool conflict = false;
+            for (int j : colors[chosenColor]) {
+                const auto& other = m_contactPoints[j];
+                if (aWritable && (cp.bodyA == other.bodyA || cp.bodyA == other.bodyB)) { conflict = true; break; }
+                if (bWritable && (cp.bodyB == other.bodyA || cp.bodyB == other.bodyB)) { conflict = true; break; }
+            }
+            if (!conflict) {
+                colors[chosenColor].push_back(i);
+                m_contactPoints[i].color = static_cast<uint8_t>(chosenColor);
+                placed = true;
+            } else {
+                ++chosenColor;
+            }
+        }
+    }
+}
+
+void PhysicsWorld::buildGlobalContactColors() {
+    m_globalContactColors.clear();
+    for (int i = 0; i < static_cast<int>(m_contactPoints.size()); ++i) {
+        uint8_t c = m_contactPoints[i].color;
+        if (c >= m_globalContactColors.size())
+            m_globalContactColors.resize(c + 1);
+        m_globalContactColors[c].push_back(i);
+    }
+}
+
 void PhysicsWorld::buildCcdContacts(float dt) {
     m_pool.forEach([&](uint32_t idA, const BodyData& da) {
         if (!da.ccdEnabled) return;
@@ -807,10 +1495,10 @@ void PhysicsWorld::buildCcdContacts(float dt) {
         if (speed < 1e-6f) return;
 
         // Swept AABB: union of current and end-of-step position AABBs
-        AABB aabbCur = da.shape->computeAABB(da.transform);
+        AABB aabbCur = computeBodyAABB(da);
         Transform futureT(da.transform.position + da.linearVelocity * dt,
                           da.transform.rotation);
-        AABB aabbFut = da.shape->computeAABB(futureT);
+        AABB aabbFut = computeBodyAABB(da.shape.get(), futureT);
         AABB swept   = aabbCur.merged(aabbFut);
 
         m_broadPhase.queryAABB(swept, da.layer, da.mask, [&](uint32_t idB) {
@@ -828,7 +1516,7 @@ void PhysicsWorld::buildCcdContacts(float dt) {
             if (collide(siA, siB)) return;
 
             // Conservative step size: obstacle can't be skipped if step <= its min half-extent
-            AABB aabbB = db.shape->computeAABB(db.transform);
+            AABB aabbB = computeBodyAABB(db);
             float bHalfX = (aabbB.max.x() - aabbB.min.x()) * 0.5f;
             float bHalfY = (aabbB.max.y() - aabbB.min.y()) * 0.5f;
             float bHalfZ = (aabbB.max.z() - aabbB.min.z()) * 0.5f;
@@ -922,6 +1610,7 @@ void PhysicsWorld::buildCcdContacts(float dt) {
 
             p.lambdaN = p.lambdaT0 = p.lambdaT1 = 0.f;
             p.wsiN = p.wsiT0 = p.wsiT1 = nullptr;  // no warm start for speculative contacts
+            p.depth = 0.f;  // speculative contacts have no penetration
 
             m_contactPoints.push_back(p);
         });

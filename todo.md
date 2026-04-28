@@ -225,7 +225,7 @@ Implementation roadmap. Work through phases in order — each phase's output is 
 - [x] `PhysicsBackend` enum `{Cpu, Gpu, Auto}` added to `PhysicsWorld` public API
 - [x] `world.setBackend(PhysicsBackend)` — selects backend; falls back to Cpu if GPU init fails
 - [x] `world.setGpuBodyThreshold(int)` — Auto switches at this body count
-- [x] `campello_gpu` v0.9.0 FetchContent integration (conditional on `CAMPELLO_PHYSICS_GPU=ON`)
+- [x] `campello_gpu` v0.13.0 FetchContent integration (conditional on `CAMPELLO_PHYSICS_GPU=ON`)
 - [x] `IGpuBackend` interface (`src/gpu/gpu_backend.h`)
 - [x] `GpuBodyState` / `GpuBodyShape` / `GpuShaderParams` / `GpuPair` GPU buffer structs
 - [x] `GpuPhysicsBackend` skeleton (`src/gpu/gpu_physics_backend.h/.cpp`)

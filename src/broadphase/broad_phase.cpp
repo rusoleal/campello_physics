@@ -22,39 +22,40 @@ BroadPhase::~BroadPhase() = default;
 void BroadPhase::insertBody(uint32_t id, const AABB& aabb,
                              uint32_t layer, uint32_t mask, bool isStatic)
 {
-    assert(m_proxies.find(id) == m_proxies.end() && "body already inserted");
+    if (id >= m_proxies.size()) m_proxies.resize(id + 1);
+    assert(!m_proxies[id].valid && "body already inserted");
 
     DynamicBVH& tree = isStatic ? m_trees->staticTree : m_trees->dynamicTree;
     auto nodeId = tree.insert(static_cast<int>(id), aabb);
-    m_proxies[id] = ProxyData{nodeId.value, layer, mask, isStatic};
+    m_proxies[id] = ProxyData{nodeId.value, layer, mask, isStatic, true};
 }
 
 void BroadPhase::removeBody(uint32_t id) {
-    auto it = m_proxies.find(id);
-    assert(it != m_proxies.end() && "body not found");
+    assert(id < m_proxies.size() && m_proxies[id].valid && "body not found");
 
-    DynamicBVH& tree = it->second.isStatic ? m_trees->staticTree : m_trees->dynamicTree;
-    tree.remove(DynamicBVH::NodeId{it->second.nodeValue});
-    m_proxies.erase(it);
+    DynamicBVH& tree = m_proxies[id].isStatic ? m_trees->staticTree : m_trees->dynamicTree;
+    tree.remove(DynamicBVH::NodeId{m_proxies[id].nodeValue});
+    m_proxies[id].valid = false;
 }
 
 void BroadPhase::updateBody(uint32_t id, const AABB& aabb) {
-    auto it = m_proxies.find(id);
-    assert(it != m_proxies.end() && "body not found");
-    if (it->second.isStatic) return;  // static bodies never move
+    assert(id < m_proxies.size() && m_proxies[id].valid && "body not found");
+    if (m_proxies[id].isStatic) return;  // static bodies never move
 
     DynamicBVH& tree = m_trees->dynamicTree;
-    DynamicBVH::NodeId node{it->second.nodeValue};
+    DynamicBVH::NodeId node{m_proxies[id].nodeValue};
     if (tree.update(node, static_cast<int>(id), aabb))
-        it->second.nodeValue = node.value;
+        m_proxies[id].nodeValue = node.value;
 }
 
 // ── Pair helpers ──────────────────────────────────────────────────────────────
 
 void BroadPhase::addPairIfFiltered(uint32_t a, uint32_t b) {
     if (a == b) return;
-    const ProxyData& pa = m_proxies.at(a);
-    const ProxyData& pb = m_proxies.at(b);
+    if (a >= m_proxies.size() || b >= m_proxies.size()) return;
+    const ProxyData& pa = m_proxies[a];
+    const ProxyData& pb = m_proxies[b];
+    if (!pa.valid || !pb.valid) return;
     // Layer/mask filter: both bodies must accept each other's layer.
     if (!(pa.layer & pb.mask) || !(pb.layer & pa.mask)) return;
     // Canonical ordering
@@ -85,9 +86,9 @@ void BroadPhase::computePairs() {
         });
     });
 
-    // Deduplicate (a body can appear in multiple leaves after re-insertion edge cases).
+    // Sort for set_difference. Skip unique — BVH queries generate each pair
+    // exactly once (dynamic-dynamic uses idB > idA, dynamic-static are unique).
     std::sort(m_current.begin(), m_current.end());
-    m_current.erase(std::unique(m_current.begin(), m_current.end()), m_current.end());
 
     // Compute added / removed by diffing sorted lists.
     std::set_difference(m_current.begin(),  m_current.end(),
@@ -107,11 +108,11 @@ void BroadPhase::queryRay(
     const std::function<void(uint32_t)>& cb) const
 {
     auto visit = [&](int bodyId) {
-        auto it = m_proxies.find(static_cast<uint32_t>(bodyId));
-        if (it == m_proxies.end()) return;
-        const auto& p = it->second;
+        uint32_t id = static_cast<uint32_t>(bodyId);
+        if (id >= m_proxies.size() || !m_proxies[id].valid) return;
+        const auto& p = m_proxies[id];
         if ((filterLayer & p.mask) && (p.layer & filterMask))
-            cb(static_cast<uint32_t>(bodyId));
+            cb(id);
     };
     m_trees->staticTree.queryRay(origin, invDir, maxT, -1, visit);
     m_trees->dynamicTree.queryRay(origin, invDir, maxT, -1, visit);
@@ -123,11 +124,11 @@ void BroadPhase::queryAABB(
     const std::function<void(uint32_t)>& cb) const
 {
     auto visit = [&](int bodyId) {
-        auto it = m_proxies.find(static_cast<uint32_t>(bodyId));
-        if (it == m_proxies.end()) return;
-        const auto& p = it->second;
+        uint32_t id = static_cast<uint32_t>(bodyId);
+        if (id >= m_proxies.size() || !m_proxies[id].valid) return;
+        const auto& p = m_proxies[id];
         if ((filterLayer & p.mask) && (p.layer & filterMask))
-            cb(static_cast<uint32_t>(bodyId));
+            cb(id);
     };
     m_trees->staticTree.query(aabb, -1, visit);
     m_trees->dynamicTree.query(aabb, -1, visit);

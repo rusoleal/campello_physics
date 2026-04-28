@@ -136,7 +136,7 @@ TEST(CCD, SensorNotConstrainingCcdBody) {
     sd.type             = BodyType::Sensor;
     sd.shape            = std::make_shared<BoxShape>(V3(0.05f, 2.f, 2.f));
     sd.transform.position = V3(0, 0, 0);
-    world.createBody(sd);
+    [[maybe_unused]] auto unused = world.createBody(sd);
 
     Body sphere = makeFastSphere(world, V3(-0.3f, 0, 0), V3(200, 0, 0));
 

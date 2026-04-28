@@ -5,7 +5,7 @@
 // toolchains that define it via predefined macros instead.
 #if !defined(CAMPELLO_PLATFORM_WINDOWS) && !defined(CAMPELLO_PLATFORM_MACOS) && \
     !defined(CAMPELLO_PLATFORM_LINUX)   && !defined(CAMPELLO_PLATFORM_IOS)   && \
-    !defined(CAMPELLO_PLATFORM_ANDROID)
+    !defined(CAMPELLO_PLATFORM_ANDROID) && !defined(CAMPELLO_PLATFORM_WASM)
 #  if defined(_WIN32) || defined(_WIN64)
 #    define CAMPELLO_PLATFORM_WINDOWS
 #  elif defined(__APPLE__)
@@ -17,6 +17,8 @@
 #    endif
 #  elif defined(__ANDROID__)
 #    define CAMPELLO_PLATFORM_ANDROID
+#  elif defined(__EMSCRIPTEN__)
+#    define CAMPELLO_PLATFORM_WASM
 #  elif defined(__linux__)
 #    define CAMPELLO_PLATFORM_LINUX
 #  endif

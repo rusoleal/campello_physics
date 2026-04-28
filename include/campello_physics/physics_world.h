@@ -33,6 +33,9 @@ enum class PhysicsBackend { Cpu, Gpu, Auto };
 // Forward-declare the internal GPU backend interface (full type in src/gpu/)
 class IGpuBackend;
 
+// Forward-declare the internal thread pool (full type in src/foundation/thread_pool.h)
+class ThreadPool;
+
 // ── PhysicsWorld ──────────────────────────────────────────────────────────────
 //
 // Simulation root.  Owns a BodyPool, BroadPhase, NarrowPhase,
@@ -63,9 +66,9 @@ public:
     void setGravity       (const vm::Vector3<float>& g) noexcept;
     void setFixedTimestep (float dt) noexcept;
     void setSubsteps      (int n)    noexcept;
-    // Number of worker threads used for the parallel narrowphase.
-    // 1 = serial (default). Set before the first step() call.
-    void setWorkerThreads (int n)    noexcept { m_workerThreads = n > 1 ? n : 1; }
+    // Number of worker threads used for the parallel broadphase, narrowphase,
+    // and island solver. 1 = serial (default). Set before the first step() call.
+    void setWorkerThreads (int n)    noexcept;
 
     [[nodiscard]] vm::Vector3<float> gravity()        const noexcept;
     [[nodiscard]] float              fixedTimestep()  const noexcept;
@@ -210,6 +213,7 @@ private:
     float m_fixedTimestep  = 1.f / 60.f;
     int   m_substeps       = 1;
     float m_accumulator    = 0.f;
+    std::unique_ptr<ThreadPool> m_threadPool;
     int   m_workerThreads  = 1;
 
     std::vector<IStepListener*>    m_stepListeners;
@@ -227,10 +231,119 @@ private:
         float lambdaT0, effMassT0;
         float lambdaT1, effMassT1;
         float friction;
+        float depth;   // penetration depth (for position solve)
         // warm-start back-pointers into the manifold cache
         float* wsiN;   float* wsiT0;   float* wsiT1;
+        uint8_t color = 0;  // independent-set color for parallel solve
     };
     std::vector<ContactSolverPoint> m_contactPoints;
+
+public:
+    // SoA contact solver data (populated from m_contactPoints each substep)
+    struct ContactSolverSoA {
+        std::vector<uint32_t> bodyA, bodyB;
+        // Normal Jacobians
+        alignas(16) std::vector<float> J_va_nx, J_va_ny, J_va_nz;
+        alignas(16) std::vector<float> J_wa_nx, J_wa_ny, J_wa_nz;
+        alignas(16) std::vector<float> J_vb_nx, J_vb_ny, J_vb_nz;
+        alignas(16) std::vector<float> J_wb_nx, J_wb_ny, J_wb_nz;
+        // Tangent 0 Jacobians
+        alignas(16) std::vector<float> J_va_t0x, J_va_t0y, J_va_t0z;
+        alignas(16) std::vector<float> J_wa_t0x, J_wa_t0y, J_wa_t0z;
+        alignas(16) std::vector<float> J_vb_t0x, J_vb_t0y, J_vb_t0z;
+        alignas(16) std::vector<float> J_wb_t0x, J_wb_t0y, J_wb_t0z;
+        // Tangent 1 Jacobians
+        alignas(16) std::vector<float> J_va_t1x, J_va_t1y, J_va_t1z;
+        alignas(16) std::vector<float> J_wa_t1x, J_wa_t1y, J_wa_t1z;
+        alignas(16) std::vector<float> J_vb_t1x, J_vb_t1y, J_vb_t1z;
+        alignas(16) std::vector<float> J_wb_t1x, J_wb_t1y, J_wb_t1z;
+        // Solver state
+        alignas(16) std::vector<float> effMassN, effMassT0, effMassT1;
+        alignas(16) std::vector<float> biasN;
+        alignas(16) std::vector<float> friction;
+        alignas(16) std::vector<float> lambdaN, lambdaT0, lambdaT1;
+        // Color-major ordering metadata (built from m_globalContactColors)
+        std::vector<int> colorOffsets;   // start index in SoA for each color
+        std::vector<int> colorCounts;    // number of contacts in each color
+        std::vector<int> contactIndex;   // maps SoA index -> m_contactPoints index
+
+        void resize(size_t n) {
+            bodyA.resize(n); bodyB.resize(n);
+            J_va_nx.resize(n); J_va_ny.resize(n); J_va_nz.resize(n);
+            J_wa_nx.resize(n); J_wa_ny.resize(n); J_wa_nz.resize(n);
+            J_vb_nx.resize(n); J_vb_ny.resize(n); J_vb_nz.resize(n);
+            J_wb_nx.resize(n); J_wb_ny.resize(n); J_wb_nz.resize(n);
+            J_va_t0x.resize(n); J_va_t0y.resize(n); J_va_t0z.resize(n);
+            J_wa_t0x.resize(n); J_wa_t0y.resize(n); J_wa_t0z.resize(n);
+            J_vb_t0x.resize(n); J_vb_t0y.resize(n); J_vb_t0z.resize(n);
+            J_wb_t0x.resize(n); J_wb_t0y.resize(n); J_wb_t0z.resize(n);
+            J_va_t1x.resize(n); J_va_t1y.resize(n); J_va_t1z.resize(n);
+            J_wa_t1x.resize(n); J_wa_t1y.resize(n); J_wa_t1z.resize(n);
+            J_vb_t1x.resize(n); J_vb_t1y.resize(n); J_vb_t1z.resize(n);
+            J_wb_t1x.resize(n); J_wb_t1y.resize(n); J_wb_t1z.resize(n);
+            effMassN.resize(n); effMassT0.resize(n); effMassT1.resize(n);
+            biasN.resize(n); friction.resize(n);
+            lambdaN.resize(n); lambdaT0.resize(n); lambdaT1.resize(n);
+            contactIndex.resize(n);
+        }
+        void clear() {
+            bodyA.clear(); bodyB.clear();
+            J_va_nx.clear(); J_va_ny.clear(); J_va_nz.clear();
+            J_wa_nx.clear(); J_wa_ny.clear(); J_wa_nz.clear();
+            J_vb_nx.clear(); J_vb_ny.clear(); J_vb_nz.clear();
+            J_wb_nx.clear(); J_wb_ny.clear(); J_wb_nz.clear();
+            J_va_t0x.clear(); J_va_t0y.clear(); J_va_t0z.clear();
+            J_wa_t0x.clear(); J_wa_t0y.clear(); J_wa_t0z.clear();
+            J_vb_t0x.clear(); J_vb_t0y.clear(); J_vb_t0z.clear();
+            J_wb_t0x.clear(); J_wb_t0y.clear(); J_wb_t0z.clear();
+            J_va_t1x.clear(); J_va_t1y.clear(); J_va_t1z.clear();
+            J_wa_t1x.clear(); J_wa_t1y.clear(); J_wa_t1z.clear();
+            J_vb_t1x.clear(); J_vb_t1y.clear(); J_vb_t1z.clear();
+            J_wb_t1x.clear(); J_wb_t1y.clear(); J_wb_t1z.clear();
+            effMassN.clear(); effMassT0.clear(); effMassT1.clear();
+            biasN.clear(); friction.clear();
+            lambdaN.clear(); lambdaT0.clear(); lambdaT1.clear();
+            colorOffsets.clear(); colorCounts.clear(); contactIndex.clear();
+        }
+    };
+
+    // SoA constraint row solver data (populated from constraints each substep)
+    struct ConstraintRowSoA {
+        std::vector<uint32_t> bodyA, bodyB;
+        alignas(16) std::vector<float> J_va_x, J_va_y, J_va_z;
+        alignas(16) std::vector<float> J_wa_x, J_wa_y, J_wa_z;
+        alignas(16) std::vector<float> J_vb_x, J_vb_y, J_vb_z;
+        alignas(16) std::vector<float> J_wb_x, J_wb_y, J_wb_z;
+        alignas(16) std::vector<float> effMass, bias, lambdaMin, lambdaMax, lambda;
+        std::vector<int> colorOffsets;
+        std::vector<int> colorCounts;
+        std::vector<int> rowIndex; // maps SoA index -> (constraint, row) via m_constraintRowMap
+
+        void resize(size_t n) {
+            bodyA.resize(n); bodyB.resize(n);
+            J_va_x.resize(n); J_va_y.resize(n); J_va_z.resize(n);
+            J_wa_x.resize(n); J_wa_y.resize(n); J_wa_z.resize(n);
+            J_vb_x.resize(n); J_vb_y.resize(n); J_vb_z.resize(n);
+            J_wb_x.resize(n); J_wb_y.resize(n); J_wb_z.resize(n);
+            effMass.resize(n); bias.resize(n); lambdaMin.resize(n); lambdaMax.resize(n); lambda.resize(n);
+            rowIndex.resize(n);
+        }
+        void clear() {
+            bodyA.clear(); bodyB.clear();
+            J_va_x.clear(); J_va_y.clear(); J_va_z.clear();
+            J_wa_x.clear(); J_wa_y.clear(); J_wa_z.clear();
+            J_vb_x.clear(); J_vb_y.clear(); J_vb_z.clear();
+            J_wb_x.clear(); J_wb_y.clear(); J_wb_z.clear();
+            effMass.clear(); bias.clear(); lambdaMin.clear(); lambdaMax.clear(); lambda.clear();
+            colorOffsets.clear(); colorCounts.clear(); rowIndex.clear();
+        }
+    };
+
+private:
+    ContactSolverSoA m_contactSoA;
+    ConstraintRowSoA m_constraintSoA;
+    std::vector<std::pair<Constraint*, int>> m_constraintRowMap;
+    std::vector<std::vector<int>> m_globalConstraintColors;
 
     // Previous-frame manifold body-ID pairs (for event tracking)
     std::vector<uint64_t> m_prevContactKeys;
@@ -245,6 +358,7 @@ private:
         std::vector<Constraint*> constraintPtrs; // non-owning; valid for one substep
     };
     std::vector<Island>    m_islands;
+    std::vector<std::vector<int>> m_globalContactColors; // independent contact sets for parallel solve
     std::vector<uint32_t>  m_ufParent;  // union-find arrays, indexed by body pool ID
     std::vector<uint32_t>  m_ufRank;
 
@@ -255,12 +369,22 @@ private:
     void substep(float dt);
     void updateBroadPhase();
     void solveContactPositions(float dt);
+    void solveIslandPositions(float dt);
     void buildContacts(float dt);   // builds m_contactPoints; warm start is separate
     void warmStartContacts();       // applies warm start after wake propagation
     void buildCcdContacts(float dt);
+    void buildContactColors();      // greedy coloring for parallel contact solve
+    void buildGlobalContactColors(); // flatten per-color contacts across all islands
     void buildIslands();            // union-find grouping + wake propagation
     void solveIslands(float dt);    // per-island constraint + contact solve
     void solveContactPoint(ContactSolverPoint& p);
+    void buildContactSoA();         // AoS → SoA copy for SIMD batch solver
+    void solveContactSoA(float dt); // SSE 4-wide batch solve
+    void buildConstraintColors();      // greedy coloring for parallel constraint solve
+    void buildGlobalConstraintColors(); // flatten per-color constraint rows
+    void buildConstraintSoA();          // AoS → SoA copy for SIMD batch solver
+    void solveConstraintSoA(float dt);  // SSE 4-wide batch solve
+    void warmStartConstraints();        // SoA warm start (replaces per-constraint scalar)
     void updateIslandSleep();       // island-level simultaneous sleep decision
     void dispatchContactEvents();
     void dispatchTriggerEvents(const std::vector<CollisionPair>& added,

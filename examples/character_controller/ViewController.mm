@@ -100,7 +100,7 @@ namespace vm   = systems::leal::vector_math;
         d.type  = phys::BodyType::Static;
         d.shape = std::make_shared<phys::BoxShape>(vm::Vector3<float>(5.f, 0.5f, 5.f));
         d.transform.position = {0.f, -0.5f, 0.f};
-        _world.createBody(d);
+        (void)_world.createBody(d);
     }
 
     // Character sphere (radius 0.5)

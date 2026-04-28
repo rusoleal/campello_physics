@@ -30,4 +30,8 @@ struct IntegratorSettings {
 
 void integrate(BodyPool& pool, const IntegratorSettings& settings, float dt);
 
+// Integrate a contiguous slice of body IDs (used by the multi-threaded path).
+void integrateSlice(BodyPool& pool, const IntegratorSettings& settings, float dt,
+                    const uint32_t* ids, int count);
+
 } // namespace campello::physics

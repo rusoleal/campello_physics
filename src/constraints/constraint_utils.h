@@ -38,6 +38,14 @@ inline vm::Vector3<float> applyInvInertia(const BodyData& d, const vm::Vector3<f
         loc.x() * inv.x(), loc.y() * inv.y(), loc.z() * inv.z()));
 }
 
+inline vm::Vector3<float> applyInvInertiaWorld(const BodyData& d, const vm::Vector3<float>& v) {
+    const auto& m = d.invInertiaTensorWorld.data;
+    return vm::Vector3<float>(
+        m[0]*v.x() + m[1]*v.y() + m[2]*v.z(),
+        m[3]*v.x() + m[4]*v.y() + m[5]*v.z(),
+        m[6]*v.x() + m[7]*v.y() + m[8]*v.z());
+}
+
 // Returns two unit vectors perpendicular to v (and to each other).
 inline void perp3(const vm::Vector3<float>& v,
                   vm::Vector3<float>& p1, vm::Vector3<float>& p2) {
@@ -56,8 +64,8 @@ inline void perp3(const vm::Vector3<float>& v,
 inline void computeEffMass(const BodyData& da, const BodyData& db, ConstraintRow& r) {
     float K = dot3(r.J_va, r.J_va) * da.invMass
             + dot3(r.J_vb, r.J_vb) * db.invMass
-            + dot3(r.J_wa, applyInvInertia(da, r.J_wa))
-            + dot3(r.J_wb, applyInvInertia(db, r.J_wb));
+            + dot3(r.J_wa, applyInvInertiaWorld(da, r.J_wa))
+            + dot3(r.J_wb, applyInvInertiaWorld(db, r.J_wb));
     r.effMass = K > 1e-12f ? 1.f / K : 0.f;
 }
 
@@ -71,18 +79,18 @@ inline void solveRow(BodyData& da, BodyData& db, ConstraintRow& r) {
     dL = r.lambda - lOld;
 
     da.linearVelocity  = da.linearVelocity  + r.J_va * (dL * da.invMass);
-    da.angularVelocity = da.angularVelocity + applyInvInertia(da, r.J_wa * dL);
+    da.angularVelocity = da.angularVelocity + applyInvInertiaWorld(da, r.J_wa * dL);
     db.linearVelocity  = db.linearVelocity  + r.J_vb * (dL * db.invMass);
-    db.angularVelocity = db.angularVelocity + applyInvInertia(db, r.J_wb * dL);
+    db.angularVelocity = db.angularVelocity + applyInvInertiaWorld(db, r.J_wb * dL);
 }
 
 // Applies the warm-start impulse at the beginning of a step.
 inline void warmStartRow(BodyData& da, BodyData& db, const ConstraintRow& r) {
     const float ws = r.lambda * 0.85f;
     da.linearVelocity  = da.linearVelocity  + r.J_va * (ws * da.invMass);
-    da.angularVelocity = da.angularVelocity + applyInvInertia(da, r.J_wa * ws);
+    da.angularVelocity = da.angularVelocity + applyInvInertiaWorld(da, r.J_wa * ws);
     db.linearVelocity  = db.linearVelocity  + r.J_vb * (ws * db.invMass);
-    db.angularVelocity = db.angularVelocity + applyInvInertia(db, r.J_wb * ws);
+    db.angularVelocity = db.angularVelocity + applyInvInertiaWorld(db, r.J_wb * ws);
 }
 
 // ── Position solve ────────────────────────────────────────────────────────────
@@ -109,7 +117,7 @@ inline void solvePosRow(BodyData& da, BodyData& db, const ConstraintRow& r,
         // ── Angular-only row: correct orientations ────────────────────────────
         auto applyAng = [](BodyData& d, const vm::Vector3<float>& Jw, float lam) {
             if (d.invMass == 0.f || d.isSleeping) return;
-            auto dw = applyInvInertia(d, Jw * lam);
+            auto dw = applyInvInertiaWorld(d, Jw * lam);
             // Cap to ~11° per call to prevent high-invInertia instability
             constexpr float kMax = 0.2f;
             const float dwSq = dw.x()*dw.x() + dw.y()*dw.y() + dw.z()*dw.z();

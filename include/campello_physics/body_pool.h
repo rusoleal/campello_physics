@@ -2,6 +2,7 @@
 
 #include <campello_physics/body.h>
 #include <campello_physics/narrow_phase.h>  // for ShapeInstance
+#include <vector_math/matrix3.hpp>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -22,6 +23,7 @@ struct BodyData {
     // Mass / inertia
     float              invMass               = 0.f;
     vm::Vector3<float> invInertiaTensorLocal = { 0.f, 0.f, 0.f }; // diagonal I^-1 in local space
+    vm::Matrix3<float> invInertiaTensorWorld;                       // I^-1 in world space (updated by integrator)
 
     // Kinematics
     Transform          transform;
@@ -50,6 +52,9 @@ struct BodyData {
 
     // CCD flag
     bool ccdEnabled = false;
+
+    // Generation counter: incremented on destroy; 0 = never used, 1+ = active generations
+    uint32_t generation = 1;
 };
 
 // ── Body pool ─────────────────────────────────────────────────────────────────
@@ -67,7 +72,9 @@ public:
 
     // Destroy a body.  The handle becomes invalid.
     void destroyBody(uint32_t id);
-    void destroyBody(Body body) { destroyBody(body.id()); }
+    void destroyBody(Body body) {
+        if (body.isValid()) destroyBody(body.id());
+    }
 
     // Direct data access (for the integrator and constraint solver)
     [[nodiscard]] BodyData&       get(uint32_t id)       noexcept { return m_data[id]; }
@@ -76,11 +83,16 @@ public:
     [[nodiscard]] bool isValid(uint32_t id) const noexcept {
         return id < m_data.size() && m_data[id].active;
     }
+    [[nodiscard]] bool isValid(uint32_t id, uint32_t generation) const noexcept {
+        return id < m_data.size() && m_data[id].active && m_data[id].generation == generation;
+    }
 
     // Creates a Body handle pointing into this pool (for use by the pipeline).
-    [[nodiscard]] Body makeHandle(uint32_t id) noexcept { return Body(id, this); }
+    [[nodiscard]] Body makeHandle(uint32_t id) noexcept {
+        return Body(id, m_data[id].generation, this);
+    }
     [[nodiscard]] Body makeHandle(uint32_t id) const noexcept {
-        return Body(id, const_cast<BodyPool*>(this));
+        return Body(id, m_data[id].generation, const_cast<BodyPool*>(this));
     }
 
     // Returns a ShapeInstance for use with the narrow phase.
@@ -90,10 +102,24 @@ public:
     }
 
     // Iterate over all active bodies.
-    void forEach(const std::function<void(uint32_t id, BodyData&)>& fn);
-    void forEach(const std::function<void(uint32_t id, const BodyData&)>& fn) const;
+    template<typename Fn>
+    void forEach(Fn&& fn) {
+        for (uint32_t i = 0; i < static_cast<uint32_t>(m_data.size()); ++i)
+            if (m_data[i].active) fn(i, m_data[i]);
+    }
+    template<typename Fn>
+    void forEach(Fn&& fn) const {
+        for (uint32_t i = 0; i < static_cast<uint32_t>(m_data.size()); ++i)
+            if (m_data[i].active) fn(i, m_data[i]);
+    }
+
+    // Fast access to active dynamic body IDs (updated on create/destroy).
+    [[nodiscard]] const std::vector<uint32_t>& activeDynamicIds() const noexcept {
+        return m_activeDynamicIds;
+    }
 
     [[nodiscard]] uint32_t activeCount() const noexcept { return m_activeCount; }
+    [[nodiscard]] uint32_t ccdEnabledCount() const noexcept { return m_ccdEnabledCount; }
     [[nodiscard]] uint32_t capacity()    const noexcept {
         return static_cast<uint32_t>(m_data.size());
     }
@@ -101,7 +127,9 @@ public:
 private:
     std::vector<BodyData> m_data;
     std::vector<uint32_t> m_freeList;
+    std::vector<uint32_t> m_activeDynamicIds;
     uint32_t              m_activeCount = 0;
+    uint32_t              m_ccdEnabledCount = 0;
 };
 
 } // namespace campello::physics

@@ -97,7 +97,7 @@ TEST(Vehicle, WheelsGroundedOnPlane) {
     Transform gt = Transform::identity();
     gt.position = vm::Vector3<float>(0.f, -0.5f, 0.f);
     gnd.transform = gt;
-    world.createBody(gnd);
+    [[maybe_unused]] auto unused = world.createBody(gnd);
 
     VehicleBody vb = world.createVehicle(makeCarDesc());
 
@@ -127,7 +127,7 @@ TEST(Vehicle, ThrottleAcceleratesVehicle) {
     Transform gt = Transform::identity();
     gt.position  = vm::Vector3<float>(0.f, -0.5f, 0.f);
     gnd.transform = gt;
-    world.createBody(gnd);
+    [[maybe_unused]] auto unused = world.createBody(gnd);
 
     VehicleBody vb = world.createVehicle(makeCarDesc());
 

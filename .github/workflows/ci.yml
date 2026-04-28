@@ -129,6 +129,68 @@ jobs:
         working-directory: build
         run: ctest --output-on-failure
 
+  # ── Sanitizers (Linux x86_64 / Clang 17) ──────────────────────────────────
+
+  sanitizer-asan-ubsan:
+    name: Linux x86_64 / Clang 17 / ASan+UBSan
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Clang 17
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-17
+
+      - name: Configure
+        env:
+          CC:  clang-17
+          CXX: clang++-17
+        run: >
+          cmake -B build -S .
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCAMPELLO_PHYSICS_BUILD_TESTS=ON
+          -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer"
+          -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer"
+          -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Test
+        working-directory: build
+        run: ctest --output-on-failure
+
+  sanitizer-tsan:
+    name: Linux x86_64 / Clang 17 / TSan
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Clang 17
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-17
+
+      - name: Configure
+        env:
+          CC:  clang-17
+          CXX: clang++-17
+        run: >
+          cmake -B build -S .
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCAMPELLO_PHYSICS_BUILD_TESTS=ON
+          -DCMAKE_CXX_FLAGS="-fsanitize=thread"
+          -DCMAKE_C_FLAGS="-fsanitize=thread"
+          -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=thread"
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Test
+        working-directory: build
+        run: ctest --output-on-failure
+
   # ── Android: all ABIs × API levels — build only ───────────────────────────
 
   android:
@@ -189,3 +251,29 @@ jobs:
 
       - name: Build
         run: cmake --build build --config Release --parallel
+
+  # ── WebAssembly (Emscripten) — build + test via Node.js ───────────────────
+
+  wasm:
+    name: WebAssembly / Emscripten
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Emscripten
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 3.1.64
+
+      - name: Configure
+        run: >
+          emcmake cmake -B build -S .
+          -DCMAKE_BUILD_TYPE=Release
+          -DCAMPELLO_PHYSICS_BUILD_TESTS=ON
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Test
+        working-directory: build
+        run: ctest -C Release --output-on-failure

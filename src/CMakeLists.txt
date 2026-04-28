@@ -3,6 +3,7 @@ target_sources(campello_physics PRIVATE
 
     # Phase 1: foundation
     foundation/allocator.cpp
+    foundation/thread_pool.cpp
 
     # Phase 2: shapes (primitives are header-only)
     shapes/convex_hull_shape.cpp

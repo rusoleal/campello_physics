@@ -51,7 +51,7 @@ TEST(Serialization, SerializeProducesValidJson) {
     d.type  = BodyType::Dynamic;
     d.shape = std::make_shared<SphereShape>(0.5f);
     d.mass  = 2.f;
-    w.createBody(d);
+    [[maybe_unused]] auto unused = w.createBody(d);
     std::string json = w.serialize();
     // Must contain key markers
     EXPECT_NE(json.find("\"bodies\""), std::string::npos);
@@ -106,7 +106,7 @@ TEST(Serialization, DynamicBodyRoundTrip) {
     d.ccdEnabled      = true;
     d.transform.position = vm::Vector3<float>(1.f, 2.f, 3.f);
     d.linearVelocity     = vm::Vector3<float>(0.1f, -0.2f, 0.3f);
-    w.createBody(d);
+    [[maybe_unused]] auto _b = w.createBody(d);
 
     PhysicsWorld w2;
     ASSERT_TRUE(w2.deserialize(w.serialize()));
@@ -135,7 +135,7 @@ TEST(Serialization, StaticBodyRoundTrip) {
     BodyDescriptor d;
     d.type  = BodyType::Static;
     d.shape = std::make_shared<BoxShape>(vm::Vector3<float>(5.f, 0.5f, 5.f));
-    w.createBody(d);
+    [[maybe_unused]] auto unused = w.createBody(d);
 
     PhysicsWorld w2;
     ASSERT_TRUE(w2.deserialize(w.serialize()));
@@ -155,7 +155,7 @@ TEST(Serialization, KinematicBodyRoundTrip) {
     BodyDescriptor d;
     d.type  = BodyType::Kinematic;
     d.shape = std::make_shared<CapsuleShape>(0.4f, 0.8f);
-    w.createBody(d);
+    [[maybe_unused]] auto unused = w.createBody(d);
 
     PhysicsWorld w2;
     ASSERT_TRUE(w2.deserialize(w.serialize()));
@@ -174,7 +174,7 @@ TEST(Serialization, SensorBodyRoundTrip) {
     BodyDescriptor d;
     d.type  = BodyType::Sensor;
     d.shape = std::make_shared<SphereShape>(2.f);
-    w.createBody(d);
+    [[maybe_unused]] auto unused = w.createBody(d);
 
     PhysicsWorld w2;
     ASSERT_TRUE(w2.deserialize(w.serialize()));
@@ -190,7 +190,7 @@ TEST(Serialization, CylinderShapeRoundTrip) {
     BodyDescriptor d;
     d.type  = BodyType::Static;
     d.shape = std::make_shared<CylinderShape>(0.3f, 0.6f);
-    w.createBody(d);
+    [[maybe_unused]] auto unused = w.createBody(d);
 
     PhysicsWorld w2;
     ASSERT_TRUE(w2.deserialize(w.serialize()));
@@ -212,7 +212,7 @@ TEST(Serialization, ConvexHullShapeRoundTrip) {
     BodyDescriptor d;
     d.type  = BodyType::Static;
     d.shape = std::make_shared<ConvexHullShape>(pts);
-    w.createBody(d);
+    [[maybe_unused]] auto unused = w.createBody(d);
 
     PhysicsWorld w2;
     ASSERT_TRUE(w2.deserialize(w.serialize()));
@@ -236,7 +236,7 @@ TEST(Serialization, CompoundShapeRoundTrip) {
     d.type  = BodyType::Dynamic;
     d.shape = comp;
     d.mass  = 1.f;
-    w.createBody(d);
+    [[maybe_unused]] auto unused = w.createBody(d);
 
     PhysicsWorld w2;
     ASSERT_TRUE(w2.deserialize(w.serialize()));
@@ -257,7 +257,7 @@ TEST(Serialization, NullShapeRoundTrip) {
     d.type  = BodyType::Dynamic;
     d.shape = nullptr;
     d.mass  = 1.f;
-    w.createBody(d);
+    [[maybe_unused]] auto unused = w.createBody(d);
 
     PhysicsWorld w2;
     ASSERT_TRUE(w2.deserialize(w.serialize()));
@@ -276,7 +276,7 @@ TEST(Serialization, MultipleBodiesRoundTrip) {
         d.shape = std::make_shared<SphereShape>(0.1f * (i + 1));
         d.mass  = static_cast<float>(i + 1);
         d.transform.position = vm::Vector3<float>(static_cast<float>(i), 0.f, 0.f);
-        w.createBody(d);
+        [[maybe_unused]] auto unused = w.createBody(d);
     }
 
     PhysicsWorld w2;
@@ -292,7 +292,7 @@ TEST(Serialization, DeserializeReplacesExistingBodies) {
     d.type  = BodyType::Dynamic;
     d.shape = std::make_shared<SphereShape>(1.f);
     d.mass  = 1.f;
-    w.createBody(d);
+    [[maybe_unused]] auto unused = w.createBody(d);
     std::string json = w.serialize();
 
     // Put 10 bodies in target world first
@@ -301,7 +301,7 @@ TEST(Serialization, DeserializeReplacesExistingBodies) {
         BodyDescriptor bd;
         bd.type  = BodyType::Static;
         bd.shape = std::make_shared<BoxShape>(vm::Vector3<float>(1.f,1.f,1.f));
-        w2.createBody(bd);
+        [[maybe_unused]] auto unused = w2.createBody(bd);
     }
     ASSERT_TRUE(w2.deserialize(json));
     EXPECT_EQ(w2.bodyPool().activeCount(), 1u);
@@ -318,7 +318,7 @@ TEST(Serialization, TransformRoundTrip) {
     d.transform.position = vm::Vector3<float>(1.5f, -2.f, 0.7f);
     d.transform.rotation = vm::Quaternion<float>::axisAngle(
         vm::Vector3<float>(0.f, 1.f, 0.f), 1.2f);
-    w.createBody(d);
+    [[maybe_unused]] auto unused = w.createBody(d);
 
     PhysicsWorld w2;
     ASSERT_TRUE(w2.deserialize(w.serialize()));
@@ -337,7 +337,7 @@ TEST(Serialization, SimulatedStateRoundTrip) {
     d.type  = BodyType::Dynamic;
     d.shape = std::make_shared<SphereShape>(0.5f);
     d.mass  = 1.f;
-    w.createBody(d);
+    [[maybe_unused]] auto _b = w.createBody(d);
 
     // Simulate for half a second
     for (int i = 0; i < 30; ++i) w.step(1.f / 60.f);

@@ -1,6 +1,6 @@
 # campello_physics
 
-**Version 1.0.0** — A full-featured, from-scratch, multiplatform **C++20 3D physics engine** — part of the [campello](https://github.com/rusoleal/campello) ecosystem.
+**Version 1.2.0** — A full-featured, from-scratch, multiplatform **C++20 3D physics engine** — part of the [campello](https://github.com/rusoleal/campello) ecosystem.
 
 ---
 
@@ -86,6 +86,7 @@ The engine is modeled after the best ideas from **Unity (PhysX)**, **Unreal (Cha
 | Windows | x86_64, ARM64 | MSVC | `windows-2022`, `windows-11-arm` |
 | iOS | arm64 device, x86_64 sim, arm64 sim | Clang (Xcode 16) | `macos-15` |
 | Android | armeabi-v7a, arm64-v8a, x86, x86_64 | NDK Clang | API 21 / 29 / 35 |
+| WebAssembly | wasm32 | Emscripten 3.1+ | `ubuntu-24.04` |
 
 ---
 
@@ -176,7 +177,7 @@ for (int i = 0; i < 300; ++i)
 
 ## GPU Compute (experimental)
 
-Enable with `-DCAMPELLO_PHYSICS_GPU=ON`. Requires `campello_gpu` v0.9.0 (fetched automatically).
+Enable with `-DCAMPELLO_PHYSICS_GPU=ON`. Requires `campello_gpu` v0.13.0 (fetched automatically).
 
 ```cpp
 world.setBackend(PhysicsBackend::Gpu);   // explicit GPU

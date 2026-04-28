@@ -158,7 +158,7 @@ TEST(GpuBackend, SphereDropsAndIsStoppedByStaticPlane) {
     plane.type               = BodyType::Static;
     plane.shape              = std::make_shared<BoxShape>(V3(10.f, 0.5f, 10.f));
     plane.transform.position = V3(0.f, -0.5f, 0.f);  // top surface at y=0
-    world.createBody(plane);
+    [[maybe_unused]] auto _plane = world.createBody(plane);
 
     const float r = 0.5f;
     BodyDescriptor sphere;
@@ -190,9 +190,9 @@ TEST(GpuBackend, AutoModeRunsWithoutCrash) {
     d.mass  = 1.f;
     d.shape = std::make_shared<SphereShape>(0.5f);
     d.transform.position = V3(0.f, 5.f, 0.f);
-    w2.createBody(d);
+    [[maybe_unused]] auto _b1 = w2.createBody(d);
     d.transform.position = V3(2.f, 5.f, 0.f);
-    w2.createBody(d);
+    [[maybe_unused]] auto _b2 = w2.createBody(d);
 
     EXPECT_NO_THROW(w2.step(1.f / 60.f));
 }
