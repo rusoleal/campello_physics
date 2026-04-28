@@ -770,7 +770,7 @@ inline __m128 mm_dot3_4wide(const float* ax, const float* ay, const float* az,
     __m128 bias    = _mm_loadu_ps(&soa.biasN[i]);
     __m128 lambdaOld = _mm_loadu_ps(&soa.lambdaN[i]);
 
-    __m128 dL = _mm_fnmadd_ps(effMass, _mm_add_ps(jv, bias), _mm_setzero_ps());
+    __m128 dL = _mm_sub_ps(_mm_setzero_ps(), _mm_mul_ps(effMass, _mm_add_ps(jv, bias)));
     __m128 lambdaNew = _mm_max_ps(_mm_setzero_ps(), _mm_add_ps(lambdaOld, dL));
     dL = _mm_sub_ps(lambdaNew, lambdaOld);
 
@@ -804,7 +804,7 @@ inline __m128 mm_dot3_4wide(const float* ax, const float* ay, const float* az,
     effMass = _mm_loadu_ps(&soa.effMassT0[i]);
     lambdaOld = _mm_loadu_ps(&soa.lambdaT0[i]);
 
-    dL = _mm_fnmadd_ps(effMass, jv, _mm_setzero_ps());
+    dL = _mm_sub_ps(_mm_setzero_ps(), _mm_mul_ps(effMass, jv));
     lambdaNew = _mm_min_ps(limit, _mm_max_ps(_mm_sub_ps(_mm_setzero_ps(), limit), _mm_add_ps(lambdaOld, dL)));
     dL = _mm_sub_ps(lambdaNew, lambdaOld);
 
@@ -838,7 +838,7 @@ inline __m128 mm_dot3_4wide(const float* ax, const float* ay, const float* az,
     effMass = _mm_loadu_ps(&soa.effMassT1[i]);
     lambdaOld = _mm_loadu_ps(&soa.lambdaT1[i]);
 
-    dL = _mm_fnmadd_ps(effMass, jv, _mm_setzero_ps());
+    dL = _mm_sub_ps(_mm_setzero_ps(), _mm_mul_ps(effMass, jv));
     lambdaNew = _mm_min_ps(limit, _mm_max_ps(_mm_sub_ps(_mm_setzero_ps(), limit), _mm_add_ps(lambdaOld, dL)));
     dL = _mm_sub_ps(lambdaNew, lambdaOld);
 
@@ -893,7 +893,7 @@ inline __m128 mm_dot3_4wide(const float* ax, const float* ay, const float* az,
     __m128 lambdaMin = _mm_loadu_ps(&soa.lambdaMin[i]);
     __m128 lambdaMax = _mm_loadu_ps(&soa.lambdaMax[i]);
 
-    __m128 dL = _mm_fnmadd_ps(effMass, _mm_add_ps(jv, bias), _mm_setzero_ps());
+    __m128 dL = _mm_sub_ps(_mm_setzero_ps(), _mm_mul_ps(effMass, _mm_add_ps(jv, bias)));
     __m128 lambdaNew = _mm_min_ps(lambdaMax, _mm_max_ps(lambdaMin, _mm_add_ps(lambdaOld, dL)));
     dL = _mm_sub_ps(lambdaNew, lambdaOld);
 
