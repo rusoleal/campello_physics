@@ -1190,7 +1190,7 @@ void PhysicsWorld::buildIslands() {
 }
 
 void PhysicsWorld::solveIslands(float dt) {
-    const int constraintIterations = m_constraintSolver.iterations;
+    const int solverIterations = m_constraintSolver.iterations;
 
     // ── Constraint solve (per-island, constraint-level color + row-batch SIMD) ───
     auto solveConstraints = [&](int first, int last) {
@@ -1327,7 +1327,7 @@ void PhysicsWorld::solveIslands(float dt) {
             }
 
             // Solve iterations: row-group-major within each color, 4-wide SSE batches
-            for (int iter = 0; iter < constraintIterations; ++iter) {
+            for (int iter = 0; iter < solverIterations; ++iter) {
                 for (int ci = 0; ci < static_cast<int>(constraintColors.size()); ++ci) {
                     int colorOffset = soa.colorOffsets[ci];
                     int prevEnd = colorOffset;
